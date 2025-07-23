@@ -13,15 +13,16 @@ kite.set_access_token(ACCESS_TOKEN)
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    data = request.json
-    print("🔔 Webhook received:", data)
-
-    if data.get("secret") != WEBHOOK_SECRET:
-        return jsonify({"status": "unauthorized"}), 403
-
     try:
+        data = request.json
+        print("🔔 Webhook received:", data, flush=True)
+
+        if data.get("secret") != WEBHOOK_SECRET:
+            print("❌ Invalid secret!", flush=True)
+            return jsonify({"status": "unauthorized"}), 403
+
         order_id = kite.place_order(
-            tradingsymbol=data["instrument"],
+            tradingsymbol=data["instrument"],  # 👈 If this key is missing, it will crash
             exchange=data.get("exchange", "NFO"),
             transaction_type=data["action"],
             quantity=int(data["quantity"]),
@@ -29,12 +30,13 @@ def webhook():
             product=data.get("product", "NRML"),
             variety="regular"
         )
-        print(f"✅ Order placed: {order_id}")
-        return jsonify({"status": "success", "order_id": order_id})
-    except Exception as e:
-        print("❌ Error:", str(e))
-        return jsonify({"status": "error", "message": str(e)}), 500
 
+        print(f"✅ Order placed: {order_id}", flush=True)
+        return jsonify({"status": "success", "order_id": order_id})
+
+    except Exception as e:
+        print("❌ Error placing order:", str(e), flush=True)
+        return jsonify({"status": "error", "message": str(e)}), 500
 @app.route("/", methods=["GET"])
 def home():
     return "🚀 SBIN Webhook Bot is Running!"
