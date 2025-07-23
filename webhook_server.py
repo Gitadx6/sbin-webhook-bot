@@ -21,7 +21,7 @@ def webhook():
 
     try:
         order_id = kite.place_order(
-            tradingsymbol=data["symbol"],
+            tradingsymbol=data["instrument"],
             exchange=data.get("exchange", "NFO"),
             transaction_type=data["action"],
             quantity=int(data["quantity"]),
