@@ -44,3 +44,7 @@ def home():
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
 print("🚀 Deployed version 1.1")
+@app.route("/test", methods=["POST"])
+def test_alert():
+    print("✅ Test alert received from TradingView:", request.json, flush=True)
+    return jsonify({"status": "test success", "data": request.json})
