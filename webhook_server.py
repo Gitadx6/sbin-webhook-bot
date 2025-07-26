@@ -41,7 +41,7 @@ def webhook():
 def home():
     return "🚀 SBIN Webhook Bot is Running!"
 
-@app.route("/test", methods=["POST"])//trade vewi testing
+@app.route("/test", methods=["POST"])
 def test_alert():
     print("✅ Test alert received from TradingView:", request.json, flush=True)
     return jsonify({"status": "test success", "data": request.json})
