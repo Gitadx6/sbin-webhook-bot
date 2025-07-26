@@ -41,10 +41,12 @@ def webhook():
 def home():
     return "🚀 SBIN Webhook Bot is Running!"
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
-print("🚀 Deployed version 1.1")
-@app.route("/test", methods=["POST"])
+@app.route("/test", methods=["POST"])//trade vewi testing
 def test_alert():
     print("✅ Test alert received from TradingView:", request.json, flush=True)
     return jsonify({"status": "test success", "data": request.json})
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
+print("🚀 Deployed version 1.1")
+
