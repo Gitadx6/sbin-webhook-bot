@@ -10,8 +10,12 @@ from monitor import start_monitor
 app = Flask(__name__)
 start_monitor()
 
+# On startup: check for existing position
 if fetch_existing_position():
+    print("✅ Existing SBIN position found. Monitoring for exit...")
     start_monitor()
+else:
+    print("🔍 No open position found. Waiting for TradingView signal to enter trade.")
 
 @app.route("/", methods=["GET"])
 def home():
