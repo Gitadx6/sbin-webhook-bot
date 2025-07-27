@@ -8,6 +8,9 @@ WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 kite = KiteConnect(api_key=API_KEY)
 kite.set_access_token(ACCESS_TOKEN)
 
+SL_PERCENT = 0.0075  # 0.75% Stop Loss
+TSL_PERCENT = 0.0075  # 0.75% Trailing Stop Loss
+
 def resolve_token(symbol):
     instruments = kite.instruments("NFO")
     for item in instruments:
