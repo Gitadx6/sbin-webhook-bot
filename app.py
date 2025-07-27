@@ -4,9 +4,14 @@ from symbol_resolver import resolve_sbin_future
 from histogram import fetch_histogram
 from order_manager import place_order
 from monitor import start_monitor
+from position_manager import fetch_existing_position
+from monitor import start_monitor
 
 app = Flask(__name__)
 start_monitor()
+
+if fetch_existing_position():
+    start_monitor()
 
 @app.route("/", methods=["GET"])
 def home():
