@@ -1,8 +1,8 @@
 import time
-from config import current_position, kite
+import threading
+from config import current_position, kite, SL_PERCENT, TSL_PERCENT
 from order_manager import exit_position
 from histogram import fetch_histogram
-import threading
 
 def monitor_loop():
     while True:
@@ -20,7 +20,7 @@ def monitor_loop():
                 # TSL check + update
                 if current_position["side"] == "LONG":
                     if ltp > current_position["entry_price"]:
-                        tsl = ltp * 0.995
+                        tsl = ltp * (1 - TSL_PERCENT)
                         if tsl > current_position["trailing_sl"]:
                             current_position["trailing_sl"] = tsl
                     if ltp <= current_position["trailing_sl"]:
@@ -28,7 +28,7 @@ def monitor_loop():
 
                 elif current_position["side"] == "SHORT":
                     if ltp < current_position["entry_price"]:
-                        tsl = ltp * 1.005
+                        tsl = ltp * (1 + TSL_PERCENT)
                         if tsl < current_position["trailing_sl"]:
                             current_position["trailing_sl"] = tsl
                     if ltp >= current_position["trailing_sl"]:
@@ -40,6 +40,7 @@ def monitor_loop():
                     exit_position()
                 elif current_position["side"] == "SHORT" and hist > 0 and prev_hist <= 0:
                     exit_position()
+
         except Exception as e:
             print("❌ Monitor error:", e)
 
