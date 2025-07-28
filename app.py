@@ -11,9 +11,9 @@ start_monitor()
 
 # On startup: check for existing position
 if fetch_existing_position():
-    print("✅ Existing SBIN position found. Monitoring for exit...")
+    print("✅ Existing SBIN position found. Monitoring for exit...", flush=True)
 else:
-    print("🔍 No open position found. Waiting for TradingView signal to enter trade.")
+    print("🔍 No open position found. Waiting for TradingView signal to enter trade.", flush=True)
 
 @app.route("/", methods=["GET"])
 def home():
@@ -23,11 +23,11 @@ def home():
 def webhook():
     try:
         data = request.get_json(force=True)
-        print("📩 Webhook received:", data)
+        print("📩 Webhook received:", data, flush=True)
 
         # Verify secret key
         if data.get("secret") != WEBHOOK_SECRET:
-            print("❌ Invalid secret key!")
+            print("❌ Invalid secret key!", flush=True)
             return jsonify({"status": "unauthorized"}), 403
 
         direction = data.get("direction", "").upper()
@@ -35,12 +35,12 @@ def webhook():
 
         # Test signal to verify connectivity
         if direction == "TEST":
-            print("🧪 Test webhook received successfully.")
+            print("🧪 Test webhook received successfully.", flush=True)
             return jsonify({"status": "ok", "message": "Test successful"}), 200
 
         # Proceed only if LONG/SHORT
         if direction not in ["LONG", "SHORT"]:
-            print("⚠️ Unknown direction:", direction)
+            print("⚠️ Unknown direction:", direction, flush=True)
             return jsonify({"status": "ignored", "reason": "Invalid direction"}), 400
 
         symbol = resolve_sbin_future()
@@ -48,16 +48,18 @@ def webhook():
 
         # Confirm flip condition
         if direction == "LONG" and not (hist > 0 and prev_hist <= 0):
+            print("⛔ No green flip, ignoring LONG entry.", flush=True)
             return jsonify({"status": "ignored", "reason": "No green flip"})
         if direction == "SHORT" and not (hist < 0 and prev_hist >= 0):
+            print("⛔ No red flip, ignoring SHORT entry.", flush=True)
             return jsonify({"status": "ignored", "reason": "No red flip"})
 
         order_id = place_order(symbol, direction, price)
-        print(f"✅ Order placed: {order_id}")
+        print(f"✅ Order placed: {order_id}", flush=True)
         return jsonify({"status": "success", "order_id": order_id})
 
     except Exception as e:
-        print("❌ Webhook error:", str(e))
+        print("❌ Webhook error:", str(e), flush=True)
         return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == "__main__":
