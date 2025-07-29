@@ -2,30 +2,7 @@ import datetime
 import pandas as pd
 from kiteconnect import KiteConnect
 from config import kite, resolve_token
-
-# ========== Get Previous Expiry Symbol ==========
-
-def get_previous_expiry_symbol(current_symbol):
-    import re
-
-    match = re.match(r"SBIN(\d{2})([A-Z]{3})FUT", current_symbol)
-    if not match:
-        return None
-
-    year = int(match.group(1))
-    month_str = match.group(2).upper()
-
-    months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN",
-              "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
-    month_index = months.index(month_str)
-
-    prev_index = (month_index - 1) % 12
-    prev_month_str = months[prev_index]
-
-    if month_index == 0:
-        year -= 1
-
-    return f"SBIN{year:02d}{prev_month_str}FUT"
+from symbol_resolver import resolve_sbin_future
 
 # ========== Get Candles ==========
 
@@ -48,22 +25,17 @@ def get_candles(symbol, lookback=30):
 
 # ========== Fetch Histogram ==========
 
-def fetch_histogram(symbol, lookback=30):
-    fallback_symbol = get_previous_expiry_symbol(symbol)
-    
-    candles = get_candles(symbol, lookback)
-    used_symbol = symbol
-
-    if len(candles) < 26:
-        print(f"⚠️ Not enough candles for {symbol}, trying fallback {fallback_symbol}")
-        candles = get_candles(fallback_symbol, lookback)
-        used_symbol = fallback_symbol
-
-    if len(candles) < 26:
-        print("❌ Not enough candles even in fallback.")
-        return None, "not_enough_data"
-
+def fetch_histogram(symbol=None, lookback=30):
     try:
+        if symbol is None:
+            symbol = resolve_sbin_future()
+
+        candles = get_candles(symbol, lookback)
+        used_symbol = symbol
+
+        if len(candles) < 26:
+            raise Exception("Not enough candles")
+
         df = pd.DataFrame(candles)
         df.columns = ["date", "open", "high", "low", "close", "volume"]
 
@@ -88,5 +60,5 @@ def fetch_histogram(symbol, lookback=30):
         }, "ok"
 
     except Exception as e:
-        print(f"❌ Error in MACD histogram calculation: {e}")
+        print(f"❌ Error in MACD histogram calculation for {symbol}: {e}")
         return None, "error"
