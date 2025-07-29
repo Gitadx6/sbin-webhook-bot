@@ -13,10 +13,10 @@ def fetch_existing_position():
 
             if side == "LONG":
                 stop_loss = avg_price * (1 - SL_PERCENT)
-                trailing_sl = avg_price * (1 - TSL_PERCENT)
+                trailing_sl = ltp * (1 - TSL_PERCENT)
             else:
                 stop_loss = avg_price * (1 + SL_PERCENT)
-                trailing_sl = avg_price * (1 + TSL_PERCENT)
+                trailing_sl = ltp * (1 + TSL_PERCENT)
 
             current_position.update({
                 "active": True,
@@ -44,6 +44,16 @@ def log_position_pnl():
             entry = current_position["entry_price"]
             qty = current_position["quantity"] or 0
             side = current_position["side"]
+
+            # Update TSL if price has moved favorably
+            if side == "LONG" and ltp > entry:
+                new_tsl = ltp * (1 - TSL_PERCENT)
+                if new_tsl > current_position["trailing_sl"]:
+                    current_position["trailing_sl"] = new_tsl
+            elif side == "SHORT" and ltp < entry:
+                new_tsl = ltp * (1 + TSL_PERCENT)
+                if new_tsl < current_position["trailing_sl"]:
+                    current_position["trailing_sl"] = new_tsl
 
             pnl = (ltp - entry) * qty if side == "LONG" else (entry - ltp) * qty
             sl_or_tsl = current_position["stop_loss"] if ltp <= entry else current_position["trailing_sl"]
