@@ -3,6 +3,7 @@ import threading
 from config import current_position, kite, SL_PERCENT, TSL_PERCENT
 from order_manager import exit_position
 from histogram import fetch_histogram
+from price_tracker import load_price_track, save_price_track
 
 def monitor_loop():
     while True:
@@ -17,21 +18,28 @@ def monitor_loop():
                 elif current_position["side"] == "SHORT" and ltp >= current_position["stop_loss"]:
                     exit_position()
 
-                # TSL check + update
+                # Load highest/lowest from disk
+                track = load_price_track()
+
+                # TSL check and update
                 if current_position["side"] == "LONG":
-                    if ltp > current_position["entry_price"]:
-                        tsl = ltp * (1 - TSL_PERCENT)
-                        if tsl > current_position["trailing_sl"]:
-                            current_position["trailing_sl"] = tsl
-                    if ltp <= current_position["trailing_sl"]:
+                    high = track.get("highest_price", current_position["entry_price"])
+                    if ltp > high:
+                        high = ltp
+                        save_price_track(high=high)
+                    tsl = high * (1 - TSL_PERCENT)
+                    current_position["trailing_sl"] = tsl
+                    if ltp <= tsl:
                         exit_position()
 
                 elif current_position["side"] == "SHORT":
-                    if ltp < current_position["entry_price"]:
-                        tsl = ltp * (1 + TSL_PERCENT)
-                        if tsl < current_position["trailing_sl"]:
-                            current_position["trailing_sl"] = tsl
-                    if ltp >= current_position["trailing_sl"]:
+                    low = track.get("lowest_price", current_position["entry_price"])
+                    if ltp < low:
+                        low = ltp
+                        save_price_track(low=low)
+                    tsl = low * (1 + TSL_PERCENT)
+                    current_position["trailing_sl"] = tsl
+                    if ltp >= tsl:
                         exit_position()
 
                 # Histogram flip exit
