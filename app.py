@@ -57,13 +57,23 @@ def webhook():
             return jsonify({"status": "ignored", "reason": "Invalid direction"}), 400
 
         symbol = resolve_sbin_future()
-        hist, prev_hist = fetch_histogram(symbol)[2:]
+
+        # ✅ Safe fetch_histogram usage
+        result, status = fetch_histogram(symbol)
+
+        if status != "ok" or result is None:
+            print(f"❌ Histogram fetch failed for {symbol}, skipping trade entry.", flush=True)
+            return jsonify({"status": "error", "reason": "Histogram fetch failed"}), 500
+
+        hist = result["hist"]
+        cross_to_green = result["cross_to_green"]
+        cross_to_red = result["cross_to_red"]
 
         # Confirm flip condition
-        if direction == "LONG" and not (hist > 0 and prev_hist <= 0):
+        if direction == "LONG" and not (hist > 0 and cross_to_green):
             print("⛔ No green flip, ignoring LONG entry.", flush=True)
             return jsonify({"status": "ignored", "reason": "No green flip"})
-        if direction == "SHORT" and not (hist < 0 and prev_hist >= 0):
+        if direction == "SHORT" and not (hist < 0 and cross_to_red):
             print("⛔ No red flip, ignoring SHORT entry.", flush=True)
             return jsonify({"status": "ignored", "reason": "No red flip"})
 
