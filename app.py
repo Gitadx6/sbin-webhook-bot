@@ -5,9 +5,22 @@ from histogram import fetch_histogram
 from order_manager import place_order
 from monitor import start_monitor
 from position_manager import fetch_existing_position
+import threading
+import time
 
 app = Flask(__name__)
 start_monitor()
+
+# Background thread to periodically check for existing positions
+def auto_position_checker():
+    while True:
+        if not current_position["active"]:
+            found = fetch_existing_position()
+            if found:
+                print("🔁 Position auto-detected. Monitoring for exit...", flush=True)
+        time.sleep(60)  # Check every 60 seconds
+
+threading.Thread(target=auto_position_checker, daemon=True).start()
 
 # On startup: check for existing position
 if fetch_existing_position():
