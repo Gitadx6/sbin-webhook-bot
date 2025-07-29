@@ -1,4 +1,5 @@
 from config import kite, current_position, SL_PERCENT, TSL_PERCENT
+from price_tracker import save_price_track  # NEW LINE
 
 FUTURE_LOT_SIZE = 750  # Set SBIN lot size here
 
@@ -53,3 +54,6 @@ def exit_position():
 
     print(f"🔁 Exited position: {current_position['side']} {current_position['quantity']} of {current_position['symbol']}")
     current_position["active"] = False
+
+    # ✅ Clear price tracker
+    save_price_track(high=None, low=None)
