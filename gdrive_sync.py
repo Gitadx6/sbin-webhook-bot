@@ -1,11 +1,13 @@
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload  # ✅ Needed
 import os
+import io  # ✅ Needed for download
 
 SCOPES = ['https://www.googleapis.com/auth/drive']
 SERVICE_ACCOUNT_FILE = 'credentials.json'
 
-# Drive folder ID where your DB is stored (create a folder and copy its ID from URL)
+# Drive folder ID where your DB is stored
 DRIVE_FOLDER_ID = '1DwVufFvv6f1tvGX_s1WfrBbCl6M57LDL'
 DB_FILE_NAME = 'price_tracker.db'
 
@@ -59,7 +61,7 @@ def download_file():
     fh = open(DB_FILE_NAME, "wb")
     downloader = MediaIoBaseDownload(fh, request)
     done = False
-    while done is False:
+    while not done:
         status, done = downloader.next_chunk()
     fh.close()
     print(f"✅ Downloaded {DB_FILE_NAME} from Drive.")
