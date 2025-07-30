@@ -7,6 +7,8 @@ from monitor import start_monitor
 from position_manager import fetch_existing_position
 import threading
 import time
+from gdrive_sync import download_file
+download_file()
 
 app = Flask(__name__)
 start_monitor()
