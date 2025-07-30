@@ -6,10 +6,10 @@ from symbol_resolver import resolve_sbin_future
 
 # ========== Get Candles ==========
 
-def get_candles(symbol, lookback=30):
+def get_candles(symbol, days_back=7):
     try:
         to_date = datetime.datetime.now()
-        from_date = to_date - datetime.timedelta(minutes=lookback * 30)
+        from_date = to_date - datetime.timedelta(days=days_back)
         instrument_token = resolve_token(symbol)
 
         candles = kite.historical_data(
@@ -18,6 +18,7 @@ def get_candles(symbol, lookback=30):
             to_date=to_date,
             interval="30minute"
         )
+        print(f"📊 Got {len(candles)} candles for {symbol}")
         return candles
     except Exception as e:
         print(f"❌ Error fetching candles for {symbol}: {e}")
@@ -25,12 +26,12 @@ def get_candles(symbol, lookback=30):
 
 # ========== Fetch Histogram ==========
 
-def fetch_histogram(symbol=None, lookback=30):
+def fetch_histogram(symbol=None, days_back=7):
     try:
         if symbol is None:
             symbol = resolve_sbin_future()
 
-        candles = get_candles(symbol, lookback)
+        candles = get_candles(symbol, days_back)
         used_symbol = symbol
 
         if len(candles) < 26:
