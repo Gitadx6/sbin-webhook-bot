@@ -23,7 +23,7 @@ def monitor_loop():
                 # Load highest/lowest from disk
                 track = load_price_track()
 
-                # Initialize high/low if None
+                # Initialize high/low if missing
                 if track.get("highest_price") is None:
                     track["highest_price"] = current_position["entry_price"]
                 if track.get("lowest_price") is None:
@@ -52,12 +52,16 @@ def monitor_loop():
                         exit_position()
                         continue
 
-                # Histogram flip exit
-                _, _, hist, prev_hist = fetch_histogram(sym)
-                if current_position["side"] == "LONG" and hist < 0 and prev_hist >= 0:
-                    exit_position()
-                elif current_position["side"] == "SHORT" and hist > 0 and prev_hist <= 0:
-                    exit_position()
+                # Histogram flip exit — safe unpack
+                result = fetch_histogram(sym)
+                if result and len(result) == 4:
+                    _, _, hist, prev_hist = result
+                    if current_position["side"] == "LONG" and hist < 0 and prev_hist >= 0:
+                        exit_position()
+                    elif current_position["side"] == "SHORT" and hist > 0 and prev_hist <= 0:
+                        exit_position()
+                else:
+                    print(f"⚠️ Skipping histogram check for {sym}: Incomplete histogram data")
 
         except Exception as e:
             print("❌ Monitor error:", e)
