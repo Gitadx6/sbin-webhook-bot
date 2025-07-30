@@ -15,15 +15,23 @@ def monitor_loop():
                 # SL check
                 if current_position["side"] == "LONG" and ltp <= current_position["stop_loss"]:
                     exit_position()
+                    continue
                 elif current_position["side"] == "SHORT" and ltp >= current_position["stop_loss"]:
                     exit_position()
+                    continue
 
                 # Load highest/lowest from disk
                 track = load_price_track()
 
+                # Initialize high/low if None
+                if track.get("highest_price") is None:
+                    track["highest_price"] = current_position["entry_price"]
+                if track.get("lowest_price") is None:
+                    track["lowest_price"] = current_position["entry_price"]
+
                 # TSL check and update
                 if current_position["side"] == "LONG":
-                    high = track.get("highest_price", current_position["entry_price"])
+                    high = track["highest_price"]
                     if ltp > high:
                         high = ltp
                         save_price_track(high=high)
@@ -31,9 +39,10 @@ def monitor_loop():
                     current_position["trailing_sl"] = tsl
                     if ltp <= tsl:
                         exit_position()
+                        continue
 
                 elif current_position["side"] == "SHORT":
-                    low = track.get("lowest_price", current_position["entry_price"])
+                    low = track["lowest_price"]
                     if ltp < low:
                         low = ltp
                         save_price_track(low=low)
@@ -41,6 +50,7 @@ def monitor_loop():
                     current_position["trailing_sl"] = tsl
                     if ltp >= tsl:
                         exit_position()
+                        continue
 
                 # Histogram flip exit
                 _, _, hist, prev_hist = fetch_histogram(sym)
