@@ -5,6 +5,7 @@ from config import current_position, kite, SL_PERCENT, TSL_PERCENT
 from order_manager import exit_position
 from histogram import fetch_histogram
 from price_tracker import load_price_track, save_price_track, init_db
+from gdrive_sync import upload_file  # ✅ Added for Drive upload
 
 def is_30min_boundary():
     now = datetime.datetime.now()
@@ -50,6 +51,7 @@ def monitor_loop():
                         if ltp > high:
                             high = ltp
                             save_price_track(high=high)
+                            upload_file()  # ✅ Upload to Drive after updating high
                         tsl = high * (1 - TSL_PERCENT)
                         current_position["trailing_sl"] = tsl
                         print(f"🔼 TSL (LONG): {tsl:.2f} | High: {high:.2f} | LTP: {ltp}")
@@ -63,6 +65,7 @@ def monitor_loop():
                         if ltp < low:
                             low = ltp
                             save_price_track(low=low)
+                            upload_file()  # ✅ Upload to Drive after updating low
                         tsl = low * (1 + TSL_PERCENT)
                         current_position["trailing_sl"] = tsl
                         print(f"🔽 TSL (SHORT): {tsl:.2f} | Low: {low:.2f} | LTP: {ltp}")
