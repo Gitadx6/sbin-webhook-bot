@@ -9,6 +9,12 @@ import threading
 import time
 from gdrive_sync import download_file
 download_file()
+from fastapi import FastAPI
+app = FastAPI()
+
+@app.get("/ping")
+def ping():
+    return {"status": "alive"}
 
 app = Flask(__name__)
 start_monitor()
