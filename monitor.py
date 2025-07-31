@@ -7,8 +7,9 @@ import os
 import traceback
 
 from config import kite, DB_FILE_NAME, DB_LOCK_FILE, monitor_frequency, shutdown_requested, current_position, TSL_TRAIL_AMOUNT
-# The `position_manager` module has been refactored. The correct function to import is `fetch_existing_position`, not `get_latest_position`.
-from position_manager import fetch_existing_position, update_position, save_position
+# The `position_manager` module has been refactored. We now only import `fetch_existing_position` and `save_position`.
+# The incorrect import of `update_position` has been removed.
+from position_manager import fetch_existing_position, save_position
 from symbol_resolver import resolve_token
 from order_manager import exit_position, place_order
 from gcs_sync import upload_file_to_gcs
@@ -43,18 +44,21 @@ def is_position_active():
 def calculate_tsl(ltp, side, entry_price, initial_sl):
     """
     Calculates the new Trailing Stop Loss (TSL) based on the latest LTP.
+    This logic has been simplified and corrected.
     Returns the updated TSL.
     """
     try:
         if side == "LONG":
-            profit = ltp - entry_price
-            new_tsl = max(initial_sl, entry_price + (profit - TSL_TRAIL_AMOUNT))
-            return new_tsl if new_tsl < ltp else initial_sl
+            # For a long position, the TSL should trail the current price.
+            # It's the maximum of the initial SL and the current price minus the trail amount.
+            new_tsl = max(initial_sl, ltp - TSL_TRAIL_AMOUNT)
+            return new_tsl
         
         elif side == "SHORT":
-            profit = entry_price - ltp
-            new_tsl = min(initial_sl, entry_price - (profit - TSL_TRAIL_AMOUNT))
-            return new_tsl if new_tsl > ltp else initial_sl
+            # For a short position, the TSL should trail the current price.
+            # It's the minimum of the initial SL and the current price plus the trail amount.
+            new_tsl = min(initial_sl, ltp + TSL_TRAIL_AMOUNT)
+            return new_tsl
         
     except Exception as e:
         logger.error(f"Error calculating TSL: {e}\n{traceback.format_exc()}")
@@ -84,7 +88,6 @@ def monitor_loop():
         
         try:
             # Re-read position from DB in case it was updated by the webhook
-            # The function name has been corrected to `fetch_existing_position`.
             db_position = fetch_existing_position()
             if db_position:
                 current_position.update(db_position)
@@ -117,27 +120,27 @@ def monitor_loop():
                 time.sleep(monitor_frequency)
                 continue
 
-            # Calculate PnL and TSL
-            pnl = (ltp - entry_price) * current_position["quantity"] if side == "LONG" else (entry_price - ltp) * current_position["quantity"]
-            
+            # If effective_sl is not set, this is the first monitor tick, use initial_sl
             if effective_sl is None:
-                # If effective_sl is not set, this is the first monitor tick, use initial_sl
                 effective_sl = current_position.get("initial_sl")
             
-            # Now, calculate the TSL based on the latest price and current effective SL
+            # Calculate TSL based on the latest price and update if it has moved
             new_effective_sl = calculate_tsl(ltp, side, entry_price, effective_sl)
             
             # Only update the position if the TSL has actually moved
-            if new_effective_sl != effective_sl:
+            if new_effective_sl and new_effective_sl != effective_sl:
                 current_position["effective_sl"] = new_effective_sl
                 save_position(current_position)
                 upload_file_to_gcs() # Sync to GCS after every update
+                
+            # Calculate PnL for logging
+            pnl = (ltp - entry_price) * current_position["quantity"] if side == "LONG" else (entry_price - ltp) * current_position["quantity"]
             
             # Log a summary of the current position
             logger.info("\n--- Monitoring Update @ %s ---", datetime.datetime.now().strftime("%H:%M:%S"))
             logger.info("Symbol: %s | Side: %s | Entry: %.2f", symbol, side, entry_price)
             logger.info("Current Price: %.2f | PnL: %.2f", ltp, pnl)
-            logger.info("Initial SL: %.2f | Effective SL: %.2f", current_position.get("initial_sl"), new_effective_sl)
+            logger.info("Initial SL: %.2f | Effective SL: %.2f", current_position.get("initial_sl"), current_position.get("effective_sl"))
             
             # --- Check for Exit Conditions ---
             
