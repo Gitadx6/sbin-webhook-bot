@@ -1,10 +1,11 @@
+# monitor.py
 import time
 import threading
 import datetime
 import logging
-import traceback # For detailed error tracing
+import traceback
 
-# Configure logging
+# Configure logging (can be moved to a central logging_config.py if preferred)
 logging.basicConfig(
     level=logging.INFO, # Set to logging.DEBUG for more verbose output during development
     format='%(asctime)s - %(levelname)s - %(threadName)s - %(message)s',
@@ -15,12 +16,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Assuming these imports are correctly set up and available
-from config import current_position, kite, SL_PERCENT, TSL_PERCENT
-from order_manager import exit_position
+
+# Import everything from config.py
+# This now includes kite, current_position, SL_PERCENT, TSL_PERCENT, DB_FILE_NAME, and set_active_position
+from config import current_position, kite, SL_PERCENT, TSL_PERCENT, DB_FILE_NAME, set_active_position
+
+# Import functions from other modules
+from order_manager import exit_position # Assuming this sets current_position["active"] = False
 from histogram import fetch_histogram
 from price_tracker import load_price_track, save_price_track, init_db
-from gdrive_sync import upload_file # For Drive upload
+from gdrive_sync import upload_file, download_file # Now importing download_file too
+
 
 # --- Global variables for controlled time checks ---
 _last_30min_check_timestamp = None
@@ -70,7 +76,17 @@ def monitor_loop():
     Main monitoring loop for active trading positions.
     Manages SL, TSL, and histogram-based exits.
     """
-    init_db()  # Initialize SQLite DB for price tracking
+    # --- CRITICAL STARTUP SEQUENCE ---
+    # 1. Attempt to download the latest DB file from Google Drive
+    logger.info(f"Attempting to download '{DB_FILE_NAME}' from Google Drive...")
+    downloaded = download_file()
+    if not downloaded:
+        logger.warning(f"'{DB_FILE_NAME}' not found on Google Drive or download failed. A new local DB will be created if it doesn't exist.")
+
+    # 2. Initialize the local SQLite database (this will create the file if it doesn't exist)
+    init_db()
+    # --- END CRITICAL STARTUP SEQUENCE ---
+
     last_monitor_minute = -1 # Tracks when last monitoring update was printed
 
     logger.info("Monitor loop started.")
@@ -81,13 +97,18 @@ def monitor_loop():
             minute = now.minute
 
             # Check if current_position is active. If not, pause and continue.
-            # Using .get() for safer access in case 'active' key is missing.
             if not current_position.get("active", False):
                 if last_monitor_minute != -1: # Only log once when position becomes inactive
-                    logger.info("No active position. Waiting...")
+                    logger.info("No active position. Waiting for a trade to be placed...")
                     last_monitor_minute = -1 # Reset to ensure message prints again when position becomes active
                 time.sleep(10) # Sleep for a longer duration when idle to save resources
                 continue # Skip the rest of the loop if no active position
+
+            # Ensure KiteConnect is initialized
+            if kite is None:
+                logger.error("KiteConnect is not initialized. Cannot fetch LTP. Waiting for initialization.")
+                time.sleep(10) # Wait longer if Kite is not ready
+                continue
 
             sym = current_position["symbol"]
             side = current_position["side"]
@@ -98,13 +119,13 @@ def monitor_loop():
             # Fetch Last Traded Price (LTP)
             try:
                 ltp_data = kite.ltp(f"NFO:{sym}")
+                if f"NFO:{sym}" not in ltp_data:
+                    logger.error(f"LTP data for {sym} not found in Kite response: {ltp_data}. Retrying soon.")
+                    time.sleep(5)
+                    continue
                 ltp = ltp_data[f"NFO:{sym}"]["last_price"]
-            except KeyError:
-                logger.error(f"Could not fetch LTP for {sym}. Data structure unexpected: {ltp_data}")
-                time.sleep(5) # Shorter sleep to retry fetching LTP soon
-                continue
             except Exception as e:
-                logger.error(f"Error fetching LTP for {sym}: {e}")
+                logger.error(f"Error fetching LTP for {sym}: {e}\n{traceback.format_exc()}. Retrying soon.")
                 time.sleep(5) # Shorter sleep to retry fetching LTP soon
                 continue
 
@@ -197,6 +218,7 @@ def monitor_loop():
                 if status != "ok" or result is None:
                     logger.warning("⚠️ Histogram fetch failed, skipping this cycle.")
                 else:
+                    # Using .get() for safer access to dictionary keys
                     if side == "LONG" and result.get("cross_to_red"):
                         logger.warning("📉 MACD flip to RED — Exiting LONG due to histogram flip.")
                         exit_position()
@@ -227,101 +249,45 @@ def start_monitor():
 
 # Example of how you might call start_monitor in your main application flow:
 if __name__ == "__main__":
-    # This is a placeholder for how your main script would use this.
-    # In a real trading bot, you'd likely have:
-    # 1. Kite login/session setup
-    # 2. Initial position fetching or placement
-    # 3. Then start the monitor.
-
     logger.info("Simulating main application startup...")
 
-    # --- Dummy Config and Kite objects for standalone testing ---
-    # In your actual environment, these would be populated by your 'config.py'
-    # and successful Kite login.
-    class MockKite:
-        def ltp(self, instrument):
-            # Simulate price movement for testing
-            if instrument == "NFO:BANKNIFTY24AUG47000CE":
-                # For testing a LONG position
-                # You can change this to simulate price going up/down
-                # Current time: Thursday, July 31, 2025 at 12:45:38 PM IST.
-                # Let's simulate some price action around 200 entry
-                mock_price = 200 + (time.time() % 30) - 15 # Price between 185 and 215
-                if time.time() % 60 < 10: # Simulate a dip every minute start
-                    mock_price -= 20 # Simulate hitting SL/TSL
-                return {instrument: {"last_price": mock_price}}
-            elif instrument == "NFO:NIFTY24AUG22000PE":
-                # For testing a SHORT position
-                mock_price = 100 - (time.time() % 30) + 15 # Price between 85 and 115
-                if time.time() % 60 < 10: # Simulate a rise every minute start
-                    mock_price += 20 # Simulate hitting SL/TSL
-                return {instrument: {"last_price": mock_price}}
-            return {instrument: {"last_price": 100}} # Default fallback
+    # --- Setup for standalone testing ---
+    # These mock objects and constants are now primarily managed in config.py
+    # and imported from there. This block just demonstrates how to use them.
 
+    # Example of setting an active position for testing:
+    # Call this function to simulate placing a trade and activating the monitor.
+    # This uses the set_active_position function defined in config.py
+    set_active_position(
+        symbol="BANKNIFTY24AUG47000CE",
+        side="LONG",
+        entry_price=200.0,
+        stop_loss=180.0,
+        quantity=750
+    )
+    # Uncomment the line below and comment the above to test a SHORT position
+    # set_active_position(
+    #     symbol="NIFTY24AUG22000PE",
+    #     side="SHORT",
+    #     entry_price=100.0,
+    #     stop_loss=110.0, # SL for short is above entry
+    #     quantity=1800 # Nifty quantity
+    # )
 
-    class MockOrderManager:
-        def exit_position(self):
-            logger.info("🚨 Mock: Position exit triggered!")
-            current_position["active"] = False
-            current_position["symbol"] = None # Clear symbol
-
-    class MockHistogram:
-        def fetch_histogram(self, symbol):
-            # Simulate a histogram flip every ~30 mins (for testing)
-            current_minute = datetime.datetime.now().minute
-            cross_to_red = (current_minute % 30 == 0 and current_minute % 60 != 0 and datetime.datetime.now().second < 15)
-            cross_to_green = (current_minute % 30 == 0 and current_minute % 60 == 0 and datetime.datetime.now().second < 15)
-            return {"cross_to_red": cross_to_red, "cross_to_green": cross_to_green}, "ok"
-
-    class MockPriceTracker:
-        _track_data = {"highest_price": None, "lowest_price": None}
-        def init_db(self):
-            logger.info("Mock DB initialized.")
-        def load_price_track(self):
-            return self._track_data
-        def save_price_track(self, high=None, low=None):
-            if high is not None:
-                self._track_data["highest_price"] = high
-            if low is not None:
-                self._track_data["lowest_price"] = low
-            logger.debug(f"MockPriceTracker: Saved track data: {self._track_data}")
-
-    class MockGdriveSync:
-        def upload_file(self):
-            logger.debug("Mock: Uploading file to Google Drive...")
-
-    # Assign mocks to variables used in the main code
-    kite = MockKite()
-    exit_position = MockOrderManager().exit_position
-    fetch_histogram = MockHistogram().fetch_histogram
-    load_price_track = MockPriceTracker().load_price_track
-    save_price_track = MockPriceTracker().save_price_track
-    init_db = MockPriceTracker().init_db
-    upload_file = MockGdriveSync().upload_file
-
-    # --- Define current_position (this would normally come from your order placement) ---
-    current_position = {
-        "active": True,
-        "symbol": "BANKNIFTY24AUG47000CE", # Change to "NIFTY24AUG22000PE" to test SHORT
-        "side": "LONG", # Change to "SHORT" to test SHORT
-        "entry_price": 200.0, # Adjust for testing
-        "stop_loss": 180.0,  # Initial fixed stop loss
-        "quantity": 750,
-        "effective_stop_loss": 180.0 # Crucial: Initialize effective_stop_loss
-    }
-    # These are constants, assumed to be in config.py
-    SL_PERCENT = 0.10  # 10%
-    TSL_PERCENT = 0.005 # 0.5% for trailing (or whatever your actual value is)
-
-
+    # Start the monitoring thread
     start_monitor()
 
     # Keep the main thread alive so the daemon monitor_loop continues to run
     try:
         while True:
-            time.sleep(1)
-            # You could add other main thread activities here if needed
+            time.sleep(10) # Main thread can sleep longer as monitor is in separate thread
+            # You could add other main thread activities here if needed,
+            # e.g., a simple command line interface to check position status
     except KeyboardInterrupt:
-        logger.info("Main application interrupted. Shutting down.")
+        logger.info("Main application interrupted (Ctrl+C). Shutting down.")
+        # On graceful shutdown, ensure the final DB state is uploaded
+        logger.info("Attempting final upload of price_track.db to Google Drive...")
+        upload_file() # This calls the upload_file from gdrive_sync.py
+        logger.info("Final upload attempt complete.")
     except Exception as e:
-        logger.critical(f"Main application error: {e}\n{traceback.format_exc()}")
+        logger.critical(f"Main application experienced an unexpected error: {e}\n{traceback.format_exc()}")
