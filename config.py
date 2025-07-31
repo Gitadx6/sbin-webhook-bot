@@ -1,101 +1,69 @@
 import os
 import logging
+import threading
 from kiteconnect import KiteConnect
 
-# --- Configure Logging for config.py (optional, but good practice) ---
-# This logger is specific to config.py, separate from app.py's logger
-config_logger = logging.getLogger(__name__)
-config_logger.setLevel(logging.INFO)
-# Add a handler if you want config messages to go to a separate stream/file
-# For simplicity, if basicConfig is already set in app.py, this will use that.
-
-
-# --- Sensitive Configuration: Load from Environment Variables ---
-
-# Kite Connect API Keys
-# IMPORTANT: Set these as environment variables on Render!
-# e.g., KITE_API_KEY, KITE_API_SECRET
+# --- Configuration Constants ---
+# Use environment variables for sensitive or deployment-specific settings
 KITE_API_KEY = os.environ.get("KITE_API_KEY")
 KITE_API_SECRET = os.environ.get("KITE_API_SECRET")
-KITE_REQUEST_TOKEN = os.environ.get("KITE_REQUEST_TOKEN") # If you're using a request token flow
-KITE_ACCESS_TOKEN = os.environ.get("KITE_ACCESS_TOKEN") # If you're using a persistent access token
+KITE_ACCESS_TOKEN = os.environ.get("KITE_ACCESS_TOKEN")
 
-# TradingView Webhook Secret
-# IMPORTANT: Set this as an environment variable on Render!
-# e.g., WEBHOOK_SECRET
-WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET")
+# Bot settings
+# The lot size for SBIN futures is 750
+TRADE_QUANTITY = int(os.environ.get("TRADE_QUANTITY", 750)) 
+monitor_frequency = float(os.environ.get("MONITOR_FREQUENCY", 15.0))  # seconds
+TSL_TRAIL_AMOUNT = float(os.environ.get("TSL_TRAIL_AMOUNT", 6.0)) # ₹ per share
 
-# Google Cloud Storage related environment variables
-# GCS_BUCKET_NAME: The name of your GCS bucket
-# GOOGLE_APPLICATION_CREDENTIALS: This environment variable should point to the
-#                                 service account JSON key file. Render's Secret Files
-#                                 feature is ideal for setting this path.
+# Database and synchronization settings
+DB_FILE_NAME = "bot_state.json"
+DB_LOCK_FILE = "bot_state.lock"
 GCS_BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME")
 
-# Note: SERVICE_ACCOUNT_FILE and GDRIVE_FOLDER_ID are removed as we are now using GCS.
-# The `google-cloud-storage` library automatically uses GOOGLE_APPLICATION_CREDENTIALS
-# which should be set via Render's Secret Files.
-
-
-# --- Initialize Kite Connect (only if all necessary credentials are available) ---
+# --- Global Variables ---
+# Global object for KiteConnect client
 kite = None
+
+# Global dictionary to store the current position state
+current_position = {
+    "symbol": "",
+    "token": None,
+    "side": "NONE",
+    "active": False,
+    "quantity": 0,
+    "entry_price": 0.0,
+    "initial_sl": 0.0,
+    "effective_sl": None, # Will be set to initial_sl on first monitor tick
+}
+
+# Event object to signal a graceful shutdown
+shutdown_requested = threading.Event()
+
+# --- Logging Setup ---
+# A common logger for all modules to ensure consistent output
+config_logger = logging.getLogger(__name__)
+
+# --- KiteConnect Initialization ---
+# This block initializes the KiteConnect object only if credentials are provided.
 if KITE_API_KEY and KITE_API_SECRET:
     try:
         kite = KiteConnect(api_key=KITE_API_KEY)
-        # If you have a persistent access token, set it here.
-        # Otherwise, you'll need a separate login flow to generate it.
         if KITE_ACCESS_TOKEN:
             kite.set_access_token(KITE_ACCESS_TOKEN)
             config_logger.info("KiteConnect initialized with access token.")
         else:
-            config_logger.warning("KiteConnect initialized, but no access token provided. "
-                                  "Ensure login flow is handled or access token is set.")
+            config_logger.warning("Kite API Access Token is missing. Only `KiteConnect` object is initialized. You need to provide an access token to make API calls.")
     except Exception as e:
         config_logger.error(f"Error initializing KiteConnect: {e}", exc_info=True)
-        kite = None # Ensure kite is None if initialization fails
+        kite = None
 else:
     config_logger.warning("Kite API Key or Secret missing. KiteConnect will not be initialized.")
 
-
-# --- Global State Management ---
-# This dictionary will hold the current position status.
-# It's a mutable object, so changes made to it in other modules will be reflected globally.
-current_position = {
-    "active": False,
-    "symbol": None,
-    "direction": None, # "LONG" or "SHORT"
-    "entry_price": 0.0,
-    "quantity": 0,
-    "order_id": None,
-    # Add other relevant position details as needed (e.g., stop loss, target)
-}
-config_logger.info(f"Initial current_position state: {current_position}")
-
-
-# --- Other Non-Sensitive Configurations (Examples) ---
-# You can add other configurations here that don't need to be secret
-TRADE_QUANTITY = int(os.environ.get("TRADE_QUANTITY", 1)) # Default to 1 if not set
-SLIPPAGE_TOLERANCE_PERCENT = float(os.environ.get("SLIPPAGE_TOLERANCE_PERCENT", 0.1)) # 0.1%
-
-# Database file name (e.g., for SQLite)
-# This can be a relative path, e.g., 'data/price_track.db'
-DB_FILE_NAME = os.environ.get("DB_FILE_NAME", "price_track.db")
-
-# Stop Loss and Trailing Stop Loss percentages
-# These could also be environment variables if you want to change them without code deploy
-SL_PERCENT = float(os.environ.get("SL_PERCENT", 0.01)) # Example: 1% initial stop loss
-TSL_PERCENT = float(os.environ.get("TSL_PERCENT", 0.005)) # Example: 0.5% trailing stop loss
-
-# New: Historical data and MACD calculation parameters
-HISTORICAL_DAYS_BACK = int(os.environ.get("HISTORICAL_DAYS_BACK", 7)) # Days of historical data to fetch
-CANDLE_INTERVAL = os.environ.get("CANDLE_INTERVAL", "30minute") # Interval for historical candles
-MACD_MIN_CANDLES = int(os.environ.get("MACD_MIN_CANDLES", 26)) # Minimum candles required for MACD calculation
-
-config_logger.info(f"Trade quantity: {TRADE_QUANTITY}")
-config_logger.info(f"Slippage tolerance: {SLIPPAGE_TOLERANCE_PERCENT}%")
-config_logger.info(f"Database file name: {DB_FILE_NAME}")
-config_logger.info(f"Initial Stop Loss percentage: {SL_PERCENT * 100}%")
-config_logger.info(f"Trailing Stop Loss percentage: {TSL_PERCENT * 100}%")
-config_logger.info(f"Historical days back: {HISTORICAL_DAYS_BACK}")
-config_logger.info(f"Candle interval: {CANDLE_INTERVAL}")
-config_logger.info(f"MACD minimum candles: {MACD_MIN_CANDLES}")
+# --- Local Testing with Request Token (Optional) ---
+# If you are running locally without an access token, you can use this section
+# to generate one. This is not for a production environment like Render.
+if not KITE_ACCESS_TOKEN and not os.environ.get("RENDER"):
+    config_logger.warning("No access token found. To generate one locally:")
+    config_logger.warning("1. Get a request token from the following URL:")
+    config_logger.warning(kite.login_url())
+    config_logger.warning("2. Run a separate script with the request token to get the access token.")
