@@ -28,51 +28,54 @@ def monitor_loop():
                     last_sl_tsl_check_minute = now.minute
                     print(f"🛡️ SL/TSL Check @ {now.strftime('%H:%M:%S')} | Price: {ltp}")
 
-                    # Stop-loss check
-                    if current_position["side"] == "LONG" and ltp <= current_position["stop_loss"]:
-                        print("❌ SL hit (LONG) — Exiting")
-                        exit_position()
-                        continue
-                    elif current_position["side"] == "SHORT" and ltp >= current_position["stop_loss"]:
-                        print("❌ SL hit (SHORT) — Exiting")
-                        exit_position()
-                        continue
+                    side = current_position["side"]
+                    entry = current_position["entry_price"]
+                    stop_loss = current_position["stop_loss"]
 
                     # Load previous TSL tracking
                     track = load_price_track()
                     if track.get("highest_price") is None:
-                        track["highest_price"] = current_position["entry_price"]
+                        track["highest_price"] = entry
                     if track.get("lowest_price") is None:
-                        track["lowest_price"] = current_position["entry_price"]
+                        track["lowest_price"] = entry
 
-                    # TSL logic
-                    if current_position["side"] == "LONG":
-                        high = track["highest_price"]
-                        if ltp > high:
-                            high = ltp
+                    # LONG logic
+                    if side == "LONG":
+                        if ltp < entry:
+                            if ltp <= stop_loss:
+                                print("❌ SL hit (LONG) — Exiting")
+                                exit_position()
+                                continue
+                        else:
+                            high = max(track["highest_price"], ltp)
                             save_price_track(high=high)
-                            upload_file()  # ✅ Upload to Drive after updating high
-                        tsl = high * (1 - TSL_PERCENT)
-                        current_position["trailing_sl"] = tsl
-                        print(f"🔼 TSL (LONG): {tsl:.2f} | High: {high:.2f} | LTP: {ltp}")
-                        if ltp <= tsl:
-                            print("❌ TSL hit (LONG) — Exiting")
-                            exit_position()
-                            continue
+                            upload_file()
+                            tsl = high * (1 - TSL_PERCENT)
+                            current_position["trailing_sl"] = tsl
+                            print(f"🔼 TSL (LONG): {tsl:.2f} | High: {high:.2f} | LTP: {ltp}")
+                            if ltp <= tsl:
+                                print("❌ TSL hit (LONG) — Exiting")
+                                exit_position()
+                                continue
 
-                    elif current_position["side"] == "SHORT":
-                        low = track["lowest_price"]
-                        if ltp < low:
-                            low = ltp
+                    # SHORT logic
+                    elif side == "SHORT":
+                        if ltp > entry:
+                            if ltp >= stop_loss:
+                                print("❌ SL hit (SHORT) — Exiting")
+                                exit_position()
+                                continue
+                        else:
+                            low = min(track["lowest_price"], ltp)
                             save_price_track(low=low)
-                            upload_file()  # ✅ Upload to Drive after updating low
-                        tsl = low * (1 + TSL_PERCENT)
-                        current_position["trailing_sl"] = tsl
-                        print(f"🔽 TSL (SHORT): {tsl:.2f} | Low: {low:.2f} | LTP: {ltp}")
-                        if ltp >= tsl:
-                            print("❌ TSL hit (SHORT) — Exiting")
-                            exit_position()
-                            continue
+                            upload_file()
+                            tsl = low * (1 + TSL_PERCENT)
+                            current_position["trailing_sl"] = tsl
+                            print(f"🔽 TSL (SHORT): {tsl:.2f} | Low: {low:.2f} | LTP: {ltp}")
+                            if ltp >= tsl:
+                                print("❌ TSL hit (SHORT) — Exiting")
+                                exit_position()
+                                continue
 
                 # ======= Histogram flip every 30-min boundary =======
                 if is_30min_boundary():
@@ -81,10 +84,10 @@ def monitor_loop():
                     if status != "ok" or result is None:
                         print("⚠️ Histogram fetch failed, skipping this cycle.")
                     else:
-                        if current_position["side"] == "LONG" and result["cross_to_red"]:
+                        if side == "LONG" and result["cross_to_red"]:
                             print("📉 MACD flip to RED — Exiting LONG")
                             exit_position()
-                        elif current_position["side"] == "SHORT" and result["cross_to_green"]:
+                        elif side == "SHORT" and result["cross_to_green"]:
                             print("📈 MACD flip to GREEN — Exiting SHORT")
                             exit_position()
 
