@@ -7,9 +7,11 @@ from histogram import fetch_histogram
 from price_tracker import load_price_track, save_price_track, init_db
 from gdrive_sync import upload_file  # ✅ Added for Drive upload
 
+
 def is_30min_boundary():
     now = datetime.datetime.now()
     return now.minute % 30 == 0 and now.second < 10
+
 
 def monitor_loop():
     init_db()  # Initialize SQLite DB
@@ -23,14 +25,28 @@ def monitor_loop():
                 sym = current_position["symbol"]
                 ltp = kite.ltp(f"NFO:{sym}")[f"NFO:{sym}"]["last_price"]
 
-                # ======= SL and TSL checks every 5 minutes =======
+                side = current_position["side"]
+                entry = current_position["entry_price"]
+                stop_loss = current_position["stop_loss"]
+                quantity = current_position.get("quantity", 750)
+
+                # --- PnL Calculation ---
+                if side == "LONG":
+                    pnl = (ltp - entry) * quantity
+                else:  # SHORT
+                    pnl = (entry - ltp) * quantity
+
+                print(f"📈 Monitoring Update @ {now.strftime('%H:%M:%S')}")
+                print(f"Symbol: {sym}")
+                print(f"Side: {side}")
+                print(f"Entry: {entry}")
+                print(f"Current Price: {ltp}")
+                print(f"PnL: {pnl:.2f}")
+
+                # ===== SL and TSL checks every 5 minutes =====
                 if now.minute % 5 == 0 and now.minute != last_sl_tsl_check_minute:
                     last_sl_tsl_check_minute = now.minute
                     print(f"🛡️ SL/TSL Check @ {now.strftime('%H:%M:%S')} | Price: {ltp}")
-
-                    side = current_position["side"]
-                    entry = current_position["entry_price"]
-                    stop_loss = current_position["stop_loss"]
 
                     # Load previous TSL tracking
                     track = load_price_track()
@@ -39,7 +55,6 @@ def monitor_loop():
                     if track.get("lowest_price") is None:
                         track["lowest_price"] = entry
 
-                    # LONG logic
                     if side == "LONG":
                         if ltp < entry:
                             if ltp <= stop_loss:
@@ -58,7 +73,6 @@ def monitor_loop():
                                 exit_position()
                                 continue
 
-                    # SHORT logic
                     elif side == "SHORT":
                         if ltp > entry:
                             if ltp >= stop_loss:
@@ -77,7 +91,7 @@ def monitor_loop():
                                 exit_position()
                                 continue
 
-                # ======= Histogram flip every 30-min boundary =======
+                # ===== Histogram flip every 30-min boundary =====
                 if is_30min_boundary():
                     print(f"📊 Histogram flip check @ {now.strftime('%H:%M:%S')}")
                     result, status = fetch_histogram(sym)
@@ -95,6 +109,7 @@ def monitor_loop():
             print("❌ Monitor error:", e)
 
         time.sleep(60)
+
 
 def start_monitor():
     threading.Thread(target=monitor_loop, daemon=True).start()
