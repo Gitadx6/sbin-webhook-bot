@@ -5,6 +5,9 @@ import datetime
 import logging
 import traceback
 
+# Import shutdown_requested event from app.py for graceful shutdown
+from app import shutdown_requested
+
 # Configure logging (can be moved to a central logging_config.py if preferred)
 logging.basicConfig(
     level=logging.INFO, # Set to logging.DEBUG for more verbose output during development
@@ -19,11 +22,11 @@ logger = logging.getLogger(__name__)
 
 # Import everything from config.py
 # This now includes kite, current_position, SL_PERCENT, TSL_PERCENT, DB_FILE_NAME, and set_active_position
-from config import current_position, kite, SL_PERCENT, TSL_PERCENT, DB_FILE_NAME, set_active_position
+from config import current_position, kite, SL_PERCENT, TSL_PERCENT, DB_FILE_NAME, MACD_MIN_CANDLES
 
 # Import functions from other modules
 from order_manager import exit_position # Assuming this sets current_position["active"] = False
-from histogram import fetch_histogram
+from histogram import fetch_histogram # Uses configurable parameters from config
 from price_tracker import load_price_track, save_price_track, init_db
 # Changed import from gdrive_sync to gcs_sync
 from gcs_sync import upload_file_to_gcs, download_file_from_gcs
@@ -76,6 +79,7 @@ def monitor_loop():
     """
     Main monitoring loop for active trading positions.
     Manages SL, TSL, and histogram-based exits.
+    This loop now respects the shutdown_requested event for graceful termination.
     """
     # --- CRITICAL STARTUP SEQUENCE ---
     # 1. Attempt to download the latest DB file from Google Cloud Storage
@@ -93,7 +97,7 @@ def monitor_loop():
 
     logger.info("Monitor loop started.")
 
-    while True:
+    while not shutdown_requested.is_set(): # Loop now checks for shutdown request
         try:
             now = datetime.datetime.now()
             minute = now.minute
@@ -103,13 +107,15 @@ def monitor_loop():
                 if last_monitor_minute != -1: # Only log once when position becomes inactive
                     logger.info("No active position. Waiting for a trade to be placed...")
                     last_monitor_minute = -1 # Reset to ensure message prints again when position becomes active
-                time.sleep(10) # Sleep for a longer duration when idle to save resources
+                # Shorter sleep here to be more responsive to shutdown_requested
+                time.sleep(5) 
                 continue # Skip the rest of the loop if no active position
 
             # Ensure KiteConnect is initialized
             if kite is None:
                 logger.error("KiteConnect is not initialized. Cannot fetch LTP. Waiting for initialization.")
-                time.sleep(10) # Wait longer if Kite is not ready
+                # Shorter sleep here to be more responsive to shutdown_requested
+                time.sleep(5) 
                 continue
 
             sym = current_position["symbol"]
@@ -218,7 +224,8 @@ def monitor_loop():
             # ===== Histogram flip check every 30-min boundary =====
             if is_30min_boundary_once():
                 logger.info(f"\n📊 Histogram flip check @ {now.strftime('%H:%M:%S')}")
-                result, status = fetch_histogram(sym)
+                # fetch_histogram now uses parameters from config, no need to pass days_back
+                result, status = fetch_histogram(sym) 
                 if status != "ok" or result is None:
                     logger.warning("⚠️ Histogram fetch failed, skipping this cycle.")
                 else:
@@ -235,7 +242,10 @@ def monitor_loop():
             # Consider adding a longer sleep or a mechanism to restart if critical errors occur
             # For now, it will just log and continue after the sleep.
 
-        time.sleep(1) # Sleep for 1 second to make the loop more responsive for LTP and time checks
+        # Sleep for 1 second, but allow early exit if shutdown is requested
+        time.sleep(1) 
+    
+    logger.info("Monitor loop stopped gracefully.") # Log when the loop exits
 
 def start_monitor():
     """
@@ -261,7 +271,8 @@ if __name__ == "__main__":
 
     # Example of setting an active position for testing:
     # Call this function to simulate placing a trade and activating the monitor.
-    # This uses the set_active_position function defined in config.py
+    # This uses the set_active_position function defined in order_manager.py
+    from order_manager import set_active_position
     set_active_position(
         symbol="BANKNIFTY24AUG47000CE",
         side="LONG",
@@ -283,16 +294,16 @@ if __name__ == "__main__":
 
     # Keep the main thread alive so the daemon monitor_loop continues to run
     try:
-        while True:
+        while not shutdown_requested.is_set(): # Main thread also checks for shutdown
             time.sleep(10) # Main thread can sleep longer as monitor is in separate thread
             # You could add other main thread activities here if needed,
             # e.g., a simple command line interface to check position status
     except KeyboardInterrupt:
         logger.info("Main application interrupted (Ctrl+C). Shutting down.")
-        # On graceful shutdown, ensure the final DB state is uploaded
-        logger.info("Attempting final upload of price_track.db to Google Cloud Storage...")
-        # Changed function call from upload_file() to upload_file_to_gcs()
-        upload_file_to_gcs() # This calls the upload_file_to_gcs from gcs_sync.py
-        logger.info("Final upload attempt complete.")
+        shutdown_requested.set() # Ensure shutdown event is set on Ctrl+C
     except Exception as e:
         logger.critical(f"Main application experienced an unexpected error: {e}\n{traceback.format_exc()}")
+    finally:
+        logger.info("Attempting final upload of price_track.db to Google Cloud Storage...")
+        upload_file_to_gcs() # This calls the upload_file_to_gcs from gcs_sync.py
+        logger.info("Final upload attempt complete.")
