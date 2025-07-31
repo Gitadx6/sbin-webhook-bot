@@ -13,7 +13,12 @@ KITE_ACCESS_TOKEN = os.environ.get("KITE_ACCESS_TOKEN")
 # The lot size for SBIN futures is 750
 TRADE_QUANTITY = int(os.environ.get("TRADE_QUANTITY", 750)) 
 monitor_frequency = float(os.environ.get("MONITOR_FREQUENCY", 15.0))  # seconds
-TSL_TRAIL_AMOUNT = float(os.environ.get("TSL_TRAIL_AMOUNT", 6.0)) # ₹ per share
+
+# Stop Loss and Trailing Stop Loss configurations
+# We use both a percentage-based and a fixed-point TSL for different logic
+SL_PERCENT = float(os.environ.get("SL_PERCENT", 0.01)) # 1% initial stop loss for calculations
+TSL_PERCENT = float(os.environ.get("TSL_PERCENT", 0.005)) # 0.5% trailing stop loss for calculations
+TSL_TRAIL_AMOUNT = float(os.environ.get("TSL_TRAIL_AMOUNT", 6.0)) # ₹ per share for fixed TSL
 
 # Database and synchronization settings
 DB_FILE_NAME = "bot_state.json"
