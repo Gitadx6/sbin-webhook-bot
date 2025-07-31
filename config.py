@@ -1,62 +1,61 @@
 # config.py
 from kiteconnect import KiteConnect
 import os
-import logging # Import logging
+import logging
+# No need for 'json' import anymore as Render directly mounts the file
 
-# Initialize logger for this module
+# Configure logging for this module
 logger = logging.getLogger(__name__)
 
 # --- Environment Variable Loading ---
-# Ensure python-dotenv is installed (pip install python-dotenv)
-# and your .env file is configured and added to .gitignore.
-# If running directly on Render, environment variables are typically set in Render's dashboard.
-# from dotenv import load_dotenv
-# load_dotenv() # Uncomment if you're loading from a local .env file
-
+# These variables should be set directly in your Render service's environment.
 API_KEY = os.getenv("KITE_API_KEY")
 ACCESS_TOKEN = os.getenv("KITE_ACCESS_TOKEN")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET") # If you use webhooks
 
 # --- KiteConnect Initialization ---
+kite = None # Initialize kite to None
 if not API_KEY or not ACCESS_TOKEN:
-    logger.critical("KITE_API_KEY or KITE_ACCESS_TOKEN environment variables are not set. Exiting.")
-    # In a real application, you might raise an exception or handle this more gracefully
-    # For now, let's make sure 'kite' doesn't cause errors if not initialized.
-    kite = None # Set to None to prevent errors if credentials are missing
+    logger.critical("KITE_API_KEY or KITE_ACCESS_TOKEN environment variables are not set. KiteConnect will not be initialized.")
 else:
     try:
         kite = KiteConnect(api_key=API_KEY)
         kite.set_access_token(ACCESS_TOKEN)
         logger.info("KiteConnect initialized successfully.")
     except Exception as e:
-        logger.critical(f"Error initializing KiteConnect: {e}. Check API key and access token.")
-        kite = None # Set to None on failure
-
+        logger.critical(f"Error initializing KiteConnect: {e}. Check API key and access token. KiteConnect not available.")
 
 # --- Trading Parameters ---
 SL_PERCENT = 0.0075     # 0.75% Stop Loss
 TSL_PERCENT = 0.0075    # 0.75% Trailing Stop Loss
 
 # --- Database File Name (for price_tracker.py and gdrive_sync.py) ---
-DB_FILE_NAME = 'price_track.db'
+DB_FILE_NAME = 'price_track.db' # This file will be in the root of your project directory or a specified data dir
 
-# --- Google Drive Configuration (also from environment variables) ---
-# It's highly recommended to store the service account key file path and folder ID
-# as environment variables on Render for security.
-# Example: GOOGLE_SERVICE_ACCOUNT_PATH=/etc/secrets/google_service_account.json
-# GOOGLE_DRIVE_FOLDER_ID=your_actual_folder_id
-SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_SERVICE_ACCOUNT_PATH", "path/to/your/service_account.json")
-GDRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "your_google_drive_folder_id") # Replace default with your actual ID
+# --- Google Drive Configuration ---
+# Set this to the exact path where Render mounts your secret service account file.
+# Based on your Render explanation, it's /etc/secrets/credentials.json
+SERVICE_ACCOUNT_FILE = '/etc/secrets/credentials.json'
+
+# Google Drive folder ID where your DB is stored (also from environment variable)
+GDRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "YOUR_DEFAULT_GDRIVE_FOLDER_ID") # REMEMBER TO CHANGE THIS DEFAULT ONCE
+
+# --- Check for existence of crucial files/vars at startup ---
+if not os.path.exists(SERVICE_ACCOUNT_FILE):
+    logger.critical(f"Google Service Account file NOT found at expected path: {SERVICE_ACCOUNT_FILE}. Google Drive sync will likely fail.")
+    # Set to None to prevent further errors attempting to use a non-existent file
+    SERVICE_ACCOUNT_FILE = None
+if not GDRIVE_FOLDER_ID or GDRIVE_FOLDER_ID == "YOUR_DEFAULT_GDRIVE_FOLDER_ID":
+    logger.critical("GOOGLE_DRIVE_FOLDER_ID environment variable is not set or is still default. Google Drive sync may not work as expected.")
 
 
 # --- Global Position Tracker ---
-# Updated to match the expected structure in monitor.py
 current_position = {
     "symbol": None,
     "side": None,
     "entry_price": None,
     "stop_loss": None,          # Initial fixed stop loss
-    "effective_stop_loss": None,# CRITICAL: This is the dynamic SL (initial SL or TSL)
+    "effective_stop_loss": None,# Dynamic stop loss (initial or trailed)
     "quantity": None,
     "active": False             # Whether a position is currently active
 }
@@ -66,8 +65,6 @@ def resolve_token(symbol):
     if kite is None:
         raise Exception("KiteConnect is not initialized. Cannot resolve instrument token.")
     
-    # Check if instruments are already fetched or fetch them
-    # For production, consider caching instruments to avoid repeated API calls
     try:
         instruments = kite.instruments("NFO")
     except Exception as e:
@@ -86,9 +83,9 @@ def set_active_position(symbol, side, entry_price, stop_loss, quantity=750):
     Sets or updates the current active position.
     This function should be called by your order placement logic.
     """
-    # Validate input
-    if not all([symbol, side, entry_price, stop_loss]):
-        logger.error("Attempted to set active position with incomplete data.")
+    # Validate that stop_loss is not None for numerical operations
+    if not all([symbol, side, entry_price, stop_loss is not None]):
+        logger.error(f"Attempted to set active position with incomplete or invalid data: {symbol=}, {side=}, {entry_price=}, {stop_loss=}")
         return False
 
     current_position.update({
