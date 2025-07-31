@@ -25,7 +25,8 @@ from config import current_position, kite, SL_PERCENT, TSL_PERCENT, DB_FILE_NAME
 from order_manager import exit_position # Assuming this sets current_position["active"] = False
 from histogram import fetch_histogram
 from price_tracker import load_price_track, save_price_track, init_db
-from gdrive_sync import upload_file, download_file # Now importing download_file too
+# Changed import from gdrive_sync to gcs_sync
+from gcs_sync import upload_file_to_gcs, download_file_from_gcs
 
 
 # --- Global variables for controlled time checks ---
@@ -77,11 +78,12 @@ def monitor_loop():
     Manages SL, TSL, and histogram-based exits.
     """
     # --- CRITICAL STARTUP SEQUENCE ---
-    # 1. Attempt to download the latest DB file from Google Drive
-    logger.info(f"Attempting to download '{DB_FILE_NAME}' from Google Drive...")
-    downloaded = download_file()
+    # 1. Attempt to download the latest DB file from Google Cloud Storage
+    logger.info(f"Attempting to download '{DB_FILE_NAME}' from Google Cloud Storage...")
+    # Changed function call from download_file() to download_file_from_gcs()
+    downloaded = download_file_from_gcs()
     if not downloaded:
-        logger.warning(f"'{DB_FILE_NAME}' not found on Google Drive or download failed. A new local DB will be created if it doesn't exist.")
+        logger.warning(f"'{DB_FILE_NAME}' not found on Google Cloud Storage or download failed. A new local DB will be created if it doesn't exist.")
 
     # 2. Initialize the local SQLite database (this will create the file if it doesn't exist)
     init_db()
@@ -161,7 +163,8 @@ def monitor_loop():
                     # Always update highest price to track market's favorability
                     high = max(track["highest_price"], ltp)
                     save_price_track(high=high) # Save the new high locally
-                    upload_file() # Upload the updated price track file to Google Drive
+                    # Changed function call from upload_file() to upload_file_to_gcs()
+                    upload_file_to_gcs() # Upload the updated price track file to Google Cloud Storage
 
                     # Calculate potential TSL based on the new high
                     potential_tsl = high * (1 - TSL_PERCENT)
@@ -188,7 +191,8 @@ def monitor_loop():
                     # Always update lowest price to track market's favorability
                     low = min(track["lowest_price"], ltp)
                     save_price_track(low=low) # Save the new low locally
-                    upload_file() # Upload the updated price track file to Google Drive
+                    # Changed function call from upload_file() to upload_file_to_gcs()
+                    upload_file_to_gcs() # Upload the updated price track file to Google Cloud Storage
 
                     # Calculate potential TSL based on the new low
                     potential_tsl = low * (1 + TSL_PERCENT)
@@ -267,11 +271,11 @@ if __name__ == "__main__":
     )
     # Uncomment the line below and comment the above to test a SHORT position
     # set_active_position(
-    #     symbol="NIFTY24AUG22000PE",
-    #     side="SHORT",
-    #     entry_price=100.0,
-    #     stop_loss=110.0, # SL for short is above entry
-    #     quantity=1800 # Nifty quantity
+    #    symbol="NIFTY24AUG22000PE",
+    #    side="SHORT",
+    #    entry_price=100.0,
+    #    stop_loss=110.0, # SL for short is above entry
+    #    quantity=1800 # Nifty quantity
     # )
 
     # Start the monitoring thread
@@ -286,8 +290,9 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logger.info("Main application interrupted (Ctrl+C). Shutting down.")
         # On graceful shutdown, ensure the final DB state is uploaded
-        logger.info("Attempting final upload of price_track.db to Google Drive...")
-        upload_file() # This calls the upload_file from gdrive_sync.py
+        logger.info("Attempting final upload of price_track.db to Google Cloud Storage...")
+        # Changed function call from upload_file() to upload_file_to_gcs()
+        upload_file_to_gcs() # This calls the upload_file_to_gcs from gcs_sync.py
         logger.info("Final upload attempt complete.")
     except Exception as e:
         logger.critical(f"Main application experienced an unexpected error: {e}\n{traceback.format_exc()}")
