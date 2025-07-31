@@ -173,3 +173,4 @@ if __name__ == "__main__":
         logger.info(f"Final Resolved Symbol: {resolved_symbol}")
     except Exception as e:
         logger.error(f"Failed to resolve SBIN future: {e}")
+
