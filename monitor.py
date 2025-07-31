@@ -31,10 +31,13 @@ def is_market_open():
 def is_position_active():
     """
     Returns True if a valid position is considered active, False otherwise.
-    A position is active if the 'active' flag is True and the entry price is non-zero.
+    A position is active if the 'active' flag is True and the entry price is non-zero
+    and the quantity is non-zero.
     This prevents the bot from getting stuck monitoring a phantom position.
     """
-    return current_position.get("active", False) and current_position.get("entry_price", 0) > 0
+    return (current_position.get("active", False) and 
+            current_position.get("entry_price", 0) > 0 and
+            current_position.get("quantity", 0) > 0)
 
 def calculate_tsl(ltp, side, entry_price, initial_sl):
     """
@@ -140,15 +143,32 @@ def monitor_loop():
             if (side == "LONG" and ltp <= new_effective_sl) or \
                (side == "SHORT" and ltp >= new_effective_sl):
                 logger.warning("❌ SL/TSL hit (%s) — Exiting at %.2f (Effective SL: %.2f)", side, ltp, new_effective_sl)
-                exit_position() # This function will reset current_position to inactive
-                
-            # Check for other exit signals (e.g., histogram flip, but we handle that via webhook now)
-            
+                # Call exit_position only if there is a quantity to exit
+                if current_position.get("quantity", 0) > 0:
+                    exit_position() # This function will reset current_position to inactive
+                else:
+                    logger.warning("Position has zero quantity. Resetting state without placing an order.")
+                    # Manually reset the position if it's a phantom one
+                    current_position.update({
+                        "active": False,
+                        "quantity": 0,
+                        "entry_price": 0.0,
+                    })
+                    save_position(current_position)
+                    upload_file_to_gcs()
+                    
         except Exception as e:
             logger.critical("Unhandled error in monitor_loop: %s", e, exc_info=True)
+            # Ensure the position is reset in case of an unhandled error
+            current_position.update({
+                "active": False,
+                "quantity": 0,
+                "entry_price": 0.0,
+            })
+            save_position(current_position)
+            upload_file_to_gcs()
         
         finally:
             time.sleep(monitor_frequency)
 
     logger.info("Monitor loop stopped gracefully.")
-
