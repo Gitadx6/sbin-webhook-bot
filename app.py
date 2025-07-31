@@ -3,39 +3,36 @@ import threading
 import time
 import logging
 import traceback
-import signal # Added for graceful shutdown
-from werkzeug.exceptions import BadRequest # Added for specific JSON parsing error handling
+import signal
+from werkzeug.exceptions import BadRequest
 
 from flask import Flask, request, jsonify
-# Ensure these imports are correct and available in your environment
 from config import kite, current_position, WEBHOOK_SECRET
-from symbol_resolver import resolve_sbin_future # Import the symbol resolver
+from symbol_resolver import resolve_sbin_future
 from histogram import fetch_histogram
-from order_manager import place_order # Import your custom place_order function
-from monitor import start_monitor # The main monitoring loop
-from position_manager import fetch_existing_position # To check for existing positions on startup
-from gcs_sync import get_gcs_client, upload_file_to_gcs # Import GCS client for health check and final upload
+from order_manager import place_order
+from monitor import start_monitor
+from position_manager import fetch_existing_position
+from gcs_sync import get_gcs_client, upload_file_to_gcs
+from shared_state import shutdown_requested # Updated: Import shutdown_requested from shared_state
 
 
 # --- Configuration and Initialization ---
 
-# Configure basic logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Flag to indicate if shutdown is requested (for graceful shutdown)
-shutdown_requested = threading.Event()
+# Removed: shutdown_requested = threading.Event() - it's now in shared_state.py
 
 def handle_shutdown_signal(signum, frame):
     """Handler for system termination signals."""
     logger.info(f"Received signal {signum}. Initiating graceful shutdown...")
-    shutdown_requested.set() # Set the event to signal threads to stop
+    shutdown_requested.set()
 
-# Register signal handlers for graceful shutdown
-signal.signal(signal.SIGINT, handle_shutdown_signal)  # Ctrl+C
-signal.signal(signal.SIGTERM, handle_shutdown_signal) # Sent by orchestration systems like Render
+signal.signal(signal.SIGINT, handle_shutdown_signal)
+signal.signal(signal.SIGTERM, handle_shutdown_signal)
 
 
 # Function to run once when the application starts
@@ -47,30 +44,20 @@ def initialize_bot():
     logger.info("Starting bot initialization...")
 
     try:
-        # 1. File download and DB initialization are handled by monitor's startup sequence.
-        # The monitor_loop itself will call download_file_from_gcs() and init_db().
         logger.info("File download and DB initialization handled by monitor startup.")
     except Exception as e:
         logger.error(f"Error during initial setup: {e}", exc_info=True)
-        # Depending on criticality, you might want to exit here or continue with a warning
 
-    # 2. Check for existing positions on startup.
-    # This will update current_position if a trade is found.
     if fetch_existing_position():
         logger.info("✅ Existing SBIN position found. Monitoring for exit...")
     else:
         logger.info("🔍 No open position found. Waiting for TradingView signal to enter trade.")
 
-    # 3. Start the monitor in a separate thread.
-    # This assumes start_monitor() is a long-running, blocking function.
-    # It's crucial that this runs in a separate thread to not block the Flask app.
     logger.info("Starting monitor in a background thread...")
     monitor_thread = threading.Thread(target=start_monitor, daemon=True, name="MonitorThread")
     monitor_thread.start()
     logger.info("Monitor thread started.")
 
-    # 4. Start the auto-position checker in a separate thread.
-    # This thread periodically calls fetch_existing_position to re-check for positions.
     logger.info("Starting auto-position checker in a background thread...")
     position_checker_thread = threading.Thread(target=auto_position_checker, daemon=True, name="PositionCheckerThread")
     position_checker_thread.start()
@@ -85,10 +72,9 @@ def auto_position_checker():
     Runs as a daemon thread.
     """
     logger.info("Auto-position checker thread started.")
-    while not shutdown_requested.is_set(): # Check shutdown flag
+    while not shutdown_requested.is_set():
         try:
-            # Only check if no position is currently active according to our state
-            if not current_position.get("active", False): # Use .get with default for safety
+            if not current_position.get("active", False):
                 logger.debug("No active position detected, checking for existing position...")
                 found = fetch_existing_position()
                 if found:
@@ -97,13 +83,10 @@ def auto_position_checker():
                 logger.debug("Active position found, skipping auto-check for existing position.")
         except Exception as e:
             logger.error(f"Error in auto_position_checker: {e}", exc_info=True)
-        time.sleep(60)  # Check every 60 seconds
+        time.sleep(60)
     logger.info("Auto-position checker thread stopped.")
 
 
-# Call the initialization function when the app context is ready.
-# For Gunicorn/Render, the `initialize_bot()` function will be called
-# when the application instance is loaded.
 initialize_bot()
 
 
@@ -127,8 +110,6 @@ def ping():
     
     # Check KiteConnect connectivity
     try:
-        # Attempt a lightweight Kite API call, e.g., fetching profile
-        # This requires the Kite object to be correctly authenticated in config.py
         user_profile = kite.profile()
         health_status["checks"]["kite_connect"] = {"status": "ok", "user_id": user_profile.get("user_id")}
     except Exception as e:
@@ -207,7 +188,7 @@ def webhook():
 
         # --- Core Trading Logic ---
         # 1. Resolve the correct SBIN future symbol
-        symbol = resolve_sbin_future() # This will get the current month's or next month's future
+        symbol = resolve_sbin_future()
         if not symbol:
             logger.error("❌ Could not resolve SBIN future symbol. Skipping trade entry.")
             return jsonify({"status": "error", "reason": "Symbol resolution failed"}), 500
@@ -231,7 +212,6 @@ def webhook():
             return jsonify({"status": "ignored", "reason": "No red flip"})
 
         # 4. Place the order using your order_manager function
-        # This function will also update current_position and initialize price_tracker
         order_id = place_order(symbol, direction, price)
         if order_id:
             logger.info(f"✅ Order placed and position updated: {order_id}")
@@ -240,7 +220,7 @@ def webhook():
             logger.error("❌ Order placement failed via order_manager.")
             return jsonify({"status": "error", "reason": "Order placement failed"}), 500
 
-    except BadRequest as e: # Specific error for invalid JSON
+    except BadRequest as e:
         logger.error(f"❌ Webhook JSON parsing error: {e.description}\n{traceback.format_exc()}")
         return jsonify({"status": "error", "message": "Invalid JSON format in request body"}), 400
     except ValueError as ve:
@@ -265,8 +245,6 @@ def test_alert():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 # --- Entry Point for Render/Gunicorn ---
-# This block is for local testing. On Render, you will use a WSGI server like Gunicorn.
-# Your Render 'start command' would be something like: `gunicorn app:app`
 if __name__ == "__main__":
     logger.info("Running Flask app in development mode.")
     try:
@@ -274,9 +252,9 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Flask app experienced an unexpected error: {e}\n{traceback.format_exc()}")
     finally:
-        # This block will execute when the Flask app shuts down
         logger.info("Main application shutting down. Attempting final upload of price_track.db...")
-        upload_file_to_gcs() # This calls the upload_file_to_gcs from gcs_sync.py
+        upload_file_to_gcs()
         logger.info("Final upload attempt complete.")
 
 logger.info("🚀 Deployed version 1.2 (Integrated)")
+
