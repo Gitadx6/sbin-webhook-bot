@@ -7,7 +7,8 @@ import os
 import traceback
 
 from config import kite, DB_FILE_NAME, DB_LOCK_FILE, monitor_frequency, shutdown_requested, current_position, TSL_TRAIL_AMOUNT
-from position_manager import get_latest_position, update_position, save_position
+# The `position_manager` module has been refactored. The correct function to import is `fetch_existing_position`, not `get_latest_position`.
+from position_manager import fetch_existing_position, update_position, save_position
 from symbol_resolver import resolve_token
 from order_manager import exit_position, place_order
 from gcs_sync import upload_file_to_gcs
@@ -83,7 +84,8 @@ def monitor_loop():
         
         try:
             # Re-read position from DB in case it was updated by the webhook
-            db_position = get_latest_position()
+            # The function name has been corrected to `fetch_existing_position`.
+            db_position = fetch_existing_position()
             if db_position:
                 current_position.update(db_position)
             
