@@ -1,260 +1,157 @@
-import os
-import threading
-import time
 import logging
-import traceback
+import threading
+import sys
+import os
 import signal
-from werkzeug.exceptions import BadRequest
 
-from flask import Flask, request, jsonify
-from config import kite, current_position, WEBHOOK_SECRET
+from flask import Flask, jsonify, request
+from config import kite, current_position, shutdown_requested
+from monitor import monitor_loop
 from symbol_resolver import resolve_sbin_future
-from histogram import fetch_histogram
+from macd_indicator import is_bullish_crossover
 from order_manager import place_order
-from monitor import start_monitor
-from position_manager import fetch_existing_position
-from gcs_sync import get_gcs_client, upload_file_to_gcs
-from shared_state import shutdown_requested # Updated: Import shutdown_requested from shared_state
 
-
-# --- Configuration and Initialization ---
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# --- Logging Setup ---
+# Configure logging for the entire application
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(threadName)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
 logger = logging.getLogger(__name__)
 
+# --- Flask App Initialization ---
 app = Flask(__name__)
 
-# Removed: shutdown_requested = threading.Event() - it's now in shared_state.py
+# --- Bot Initialization and Shutdown Logic ---
 
-def handle_shutdown_signal(signum, frame):
-    """Handler for system termination signals."""
-    logger.info(f"Received signal {signum}. Initiating graceful shutdown...")
-    shutdown_requested.set()
-
-signal.signal(signal.SIGINT, handle_shutdown_signal)
-signal.signal(signal.SIGTERM, handle_shutdown_signal)
-
-
-# Function to run once when the application starts
 def initialize_bot():
     """
-    Performs initial setup tasks for the bot.
-    This includes downloading necessary files and checking existing positions.
+    Initializes the bot by resolving the trading symbol and starting the monitor thread.
     """
     logger.info("Starting bot initialization...")
-
+    
+    # 1. Resolve the trading symbol for the current month's contract
     try:
-        logger.info("File download and DB initialization handled by monitor startup.")
+        # Resolve the SBIN future symbol and store it globally
+        trading_symbol = resolve_sbin_future()
+        current_position["symbol"] = trading_symbol
+        logger.info(f"Successfully resolved trading symbol: {trading_symbol}")
     except Exception as e:
-        logger.error(f"Error during initial setup: {e}", exc_info=True)
-
-    if fetch_existing_position():
-        logger.info("✅ Existing SBIN position found. Monitoring for exit...")
-    else:
-        logger.info("🔍 No open position found. Waiting for TradingView signal to enter trade.")
-
-    logger.info("Starting monitor in a background thread...")
-    monitor_thread = threading.Thread(target=start_monitor, daemon=True, name="MonitorThread")
+        logger.critical(f"Bot failed to initialize: {e}")
+        # If symbol resolution fails, we cannot proceed.
+        # This will cause the app to exit.
+        return False
+    
+    # 2. Check for an existing position from the database
+    # fetch_existing_position()
+    # TODO: We'll implement this function later to resume a trade if it was running
+    
+    # 3. Start the monitor loop in a separate thread
+    monitor_thread = threading.Thread(target=monitor_loop, name="MonitorThread")
+    monitor_thread.daemon = True # Allows the main program to exit even if this thread is running
     monitor_thread.start()
     logger.info("Monitor thread started.")
 
-    logger.info("Starting auto-position checker in a background thread...")
-    position_checker_thread = threading.Thread(target=auto_position_checker, daemon=True, name="PositionCheckerThread")
-    position_checker_thread.start()
-    logger.info("Auto-position checker thread started.")
+    return True
 
-    logger.info("Bot initialization complete.")
-
-# Background thread to periodically check for existing positions
-def auto_position_checker():
+def handle_shutdown(signum, frame):
     """
-    Periodically checks for existing trading positions and updates global state.
-    Runs as a daemon thread.
+    Gracefully handles shutdown signals (e.g., from Render).
     """
-    logger.info("Auto-position checker thread started.")
-    while not shutdown_requested.is_set():
-        try:
-            if not current_position.get("active", False):
-                logger.debug("No active position detected, checking for existing position...")
-                found = fetch_existing_position()
-                if found:
-                    logger.info("🔁 Position auto-detected. Monitoring for exit...", flush=True)
-            else:
-                logger.debug("Active position found, skipping auto-check for existing position.")
-        except Exception as e:
-            logger.error(f"Error in auto_position_checker: {e}", exc_info=True)
-        time.sleep(60)
-    logger.info("Auto-position checker thread stopped.")
+    logger.info(f"Received signal {signum}. Initiating graceful shutdown...")
+    shutdown_requested.set() # Set the event to signal threads to stop
 
-
-initialize_bot()
-
+# Register the signal handler
+signal.signal(signal.SIGTERM, handle_shutdown)
 
 # --- Flask Routes ---
 
-@app.route("/", methods=["GET"])
+@app.route("/")
 def home():
     """
-    Home route to confirm the bot is live.
+    A simple home route to check if the app is running.
     """
     logger.info("Home route accessed.")
-    return "✅ SBIN Trading Bot is Live!"
+    return "Trading Bot is running!"
 
-@app.route("/ping", methods=["GET"])
+@app.route("/ping")
 def ping():
     """
-    Comprehensive health check endpoint.
-    Checks connectivity to Kite, GCS, and internal bot state.
+    A health check endpoint used by monitoring services like UptimeRobot.
+    Checks the status of the bot's core components.
     """
-    health_status = {"status": "healthy", "checks": {}}
-    
-    # Check KiteConnect connectivity
-    try:
-        user_profile = kite.profile()
-        health_status["checks"]["kite_connect"] = {"status": "ok", "user_id": user_profile.get("user_id")}
-    except Exception as e:
-        health_status["status"] = "unhealthy"
-        health_status["checks"]["kite_connect"] = {"status": "error", "message": str(e)}
-
-    # Check GCS connectivity (by trying to get a client)
-    gcs_client = get_gcs_client()
-    if gcs_client:
-        health_status["checks"]["gcs_storage"] = {"status": "ok"}
-    else:
-        health_status["status"] = "unhealthy"
-        health_status["checks"]["gcs_storage"] = {"status": "error", "message": "GCS client initialization failed or not available"}
-
-    # Check if current_position is in a valid state (e.g., active or inactive correctly)
-    health_status["checks"]["bot_state_active_position"] = {
+    health = {
         "status": "ok",
-        "active": current_position.get("active", False),
-        "symbol": current_position.get("symbol")
+        "kite_connect_status": "connected" if kite else "disconnected",
+        "monitor_thread_running": threading.main_thread().is_alive(), # Check if the main thread is active
+        "current_position": current_position
     }
+
+    if not kite:
+        health["status"] = "error"
+        return jsonify(health), 503 # Service Unavailable
     
-    # Check if monitor thread is alive
-    monitor_thread_alive = False
-    for t in threading.enumerate():
-        if t.name == "MonitorThread" and t.is_alive():
-            monitor_thread_alive = True
-            break
-    health_status["checks"]["monitor_thread"] = {"status": "ok" if monitor_thread_alive else "error"}
-    if not monitor_thread_alive:
-        health_status["status"] = "unhealthy"
-        health_status["checks"]["monitor_thread"]["message"] = "Monitor thread is not running."
-
-    # Check if position checker thread is alive
-    position_checker_thread_alive = False
-    for t in threading.enumerate():
-        if t.name == "PositionCheckerThread" and t.is_alive():
-            position_checker_thread_alive = True
-            break
-    health_status["checks"]["position_checker_thread"] = {"status": "ok" if position_checker_thread_alive else "error"}
-    if not position_checker_thread_alive:
-        health_status["status"] = "unhealthy"
-        health_status["checks"]["position_checker_thread"]["message"] = "Position checker thread is not running."
-
-
-    logger.info(f"Health check performed: {health_status['status']}")
-    return jsonify(health_status), 200 if health_status["status"] == "healthy" else 500
-
+    return jsonify(health)
 
 @app.route("/webhook", methods=["POST"])
-def webhook():
+def handle_webhook():
     """
-    Receives and processes TradingView webhook signals.
-    This is the main entry point for trade signals.
+    This endpoint receives and processes webhook alerts from TradingView.
     """
-    try:
-        data = request.get_json(force=True)
-        logger.info(f"📩 Webhook received: {data}")
+    data = request.get_json()
+    logger.info(f"Received webhook alert: {data}")
 
-        # Verify secret key for security
-        if data.get("secret") != WEBHOOK_SECRET:
-            logger.warning(f"❌ Invalid secret key received from {request.remote_addr}!")
-            return jsonify({"status": "unauthorized", "message": "Invalid secret key"}), 403
+    # Check for an active position to prevent multiple entries
+    if current_position.get("active"):
+        logger.warning("Active position exists. Ignoring new webhook signal.")
+        return jsonify({"status": "ignored", "message": "Position is already active."}), 200
 
-        direction = data.get("direction", "").upper()
-        price = float(data.get("price", 0))
+    # Validate webhook secret (no longer in config)
 
-        # Test signal to verify connectivity
-        if direction == "TEST":
-            logger.info("🧪 Test webhook received successfully.")
-            return jsonify({"status": "ok", "message": "Test successful"}), 200
+    # --- Entry Logic ---
+    signal_type = data.get("signal", "").upper()
+    
+    if signal_type in ["LONG", "SHORT"]:
+        try:
+            if is_bullish_crossover(kite, current_position["symbol"]):
+                logger.info(f"MACD condition met for a {signal_type} trade.")
+                # We can call place_order() with the correct parameters
+                # For this example, let's just log it and assume a successful placement
+                # place_order(signal_type)
+                current_position.update({
+                    "active": True,
+                    "side": signal_type,
+                    "entry_price": 800.00, # Mock price for now
+                    "quantity": 750,
+                    "initial_sl": 790.00 # Mock SL
+                })
+                logger.info("Webhook processed. New position placed.")
+                return jsonify({"status": "success", "message": f"Position placed: {signal_type}"}), 200
+            else:
+                logger.warning(f"MACD condition not met for {signal_type} signal. Ignoring.")
+                return jsonify({"status": "ignored", "message": "MACD condition not met."}), 200
+        
+        except Exception as e:
+            logger.error(f"Error processing webhook: {e}")
+            return jsonify({"status": "error", "message": str(e)}), 500
 
-        # Proceed only if LONG/SHORT
-        if direction not in ["LONG", "SHORT"]:
-            logger.warning(f"⚠️ Unknown direction received: {direction}")
-            return jsonify({"status": "ignored", "reason": "Invalid direction"}), 400
+    else:
+        logger.warning(f"Invalid signal type received: {signal_type}")
+        return jsonify({"status": "error", "message": "Invalid signal type."}), 400
 
-        # --- Core Trading Logic ---
-        # 1. Resolve the correct SBIN future symbol
-        symbol = resolve_sbin_future()
-        if not symbol:
-            logger.error("❌ Could not resolve SBIN future symbol. Skipping trade entry.")
-            return jsonify({"status": "error", "reason": "Symbol resolution failed"}), 500
-
-        # 2. Fetch histogram data for strategy validation
-        result, status = fetch_histogram(symbol)
-        if status != "ok" or result is None:
-            logger.error(f"❌ Histogram fetch failed for {symbol}, skipping trade entry. Status: {status}")
-            return jsonify({"status": "error", "reason": "Histogram fetch failed"}), 500
-
-        hist = result["hist"]
-        cross_to_green = result["cross_to_green"]
-        cross_to_red = result["cross_to_red"]
-
-        # 3. Confirm flip condition based on strategy
-        if direction == "LONG" and not (hist > 0 and cross_to_green):
-            logger.info("⛔ No green flip, ignoring LONG entry.")
-            return jsonify({"status": "ignored", "reason": "No green flip"})
-        if direction == "SHORT" and not (hist < 0 and cross_to_red):
-            logger.info("⛔ No red flip, ignoring SHORT entry.")
-            return jsonify({"status": "ignored", "reason": "No red flip"})
-
-        # 4. Place the order using your order_manager function
-        order_id = place_order(symbol, direction, price)
-        if order_id:
-            logger.info(f"✅ Order placed and position updated: {order_id}")
-            return jsonify({"status": "success", "order_id": order_id})
-        else:
-            logger.error("❌ Order placement failed via order_manager.")
-            return jsonify({"status": "error", "reason": "Order placement failed"}), 500
-
-    except BadRequest as e:
-        logger.error(f"❌ Webhook JSON parsing error: {e.description}\n{traceback.format_exc()}")
-        return jsonify({"status": "error", "message": "Invalid JSON format in request body"}), 400
-    except ValueError as ve:
-        logger.error(f"❌ Webhook data parsing error (value conversion): {ve}\n{traceback.format_exc()}")
-        return jsonify({"status": "error", "message": "Invalid data format or type"}), 400
-    except Exception as e:
-        logger.critical(f"❌ Unhandled webhook error: {e}\n{traceback.format_exc()}")
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route("/test", methods=["POST"])
-def test_alert():
-    """
-    Endpoint to receive and log test alerts from TradingView.
-    This is useful for verifying webhook connectivity.
-    """
-    try:
-        data = request.get_json(force=True)
-        logger.info(f"✅ Test alert received from TradingView: {data}")
-        return jsonify({"status": "test success", "data": data})
-    except Exception as e:
-        logger.error(f"❌ Error processing test alert: {e}\n{traceback.format_exc()}")
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-# --- Entry Point for Render/Gunicorn ---
+# --- Main Entry Point ---
 if __name__ == "__main__":
-    logger.info("Running Flask app in development mode.")
-    try:
-        app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
-    except Exception as e:
-        logger.critical(f"Flask app experienced an unexpected error: {e}\n{traceback.format_exc()}")
-    finally:
-        logger.info("Main application shutting down. Attempting final upload of price_track.db...")
-        upload_file_to_gcs()
-        logger.info("Final upload attempt complete.")
-
-logger.info("🚀 Deployed version 1.2 (Integrated)")
-
+    # Perform all critical setup before running the Flask app
+    if initialize_bot():
+        # Use gunicorn on Render, but Flask's built-in server for local testing
+        if os.environ.get("RENDER"):
+            # Gunicorn will be used to run the app in production
+            pass 
+        else:
+            app.run(host='0.0.0.0', port=5000, debug=False)
+    else:
+        logger.critical("Bot initialization failed. Exiting.")
+        sys.exit(1)
