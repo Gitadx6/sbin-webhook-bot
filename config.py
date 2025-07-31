@@ -1,114 +1,102 @@
-# config.py
-from kiteconnect import KiteConnect
+```python
 import os
 import logging
+from kiteconnect import KiteConnect
 
-logger = logging.getLogger(__name__)
+# --- Configure Logging for config.py (optional, but good practice) ---
+# This logger is specific to config.py, separate from app.py's logger
+config_logger = logging.getLogger(__name__)
+config_logger.setLevel(logging.INFO)
+# Add a handler if you want config messages to go to a separate stream/file
+# For simplicity, if basicConfig is already set in app.py, this will use that.
 
-# --- Environment Variable Loading ---
-API_KEY = os.getenv("KITE_API_KEY")
-ACCESS_TOKEN = os.getenv("KITE_ACCESS_TOKEN")
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 
-# --- KiteConnect Initialization ---
+# --- Sensitive Configuration: Load from Environment Variables ---
+
+# Kite Connect API Keys
+# IMPORTANT: Set these as environment variables on Render!
+# e.g., KITE_API_KEY, KITE_API_SECRET
+KITE_API_KEY = os.environ.get("KITE_API_KEY")
+KITE_API_SECRET = os.environ.get("KITE_API_SECRET")
+KITE_REQUEST_TOKEN = os.environ.get("KITE_REQUEST_TOKEN") # If you're using a request token flow
+KITE_ACCESS_TOKEN = os.environ.get("KITE_ACCESS_TOKEN") # If you're using a persistent access token
+
+# TradingView Webhook Secret
+# IMPORTANT: Set this as an environment variable on Render!
+# e.g., WEBHOOK_SECRET
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET")
+
+# Google Cloud Storage related environment variables
+# GCS_BUCKET_NAME: The name of your GCS bucket
+# GOOGLE_APPLICATION_CREDENTIALS: This environment variable should point to the
+#                                 service account JSON key file. Render's Secret Files
+#                                 feature is ideal for setting this path.
+GCS_BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME")
+
+# Note: SERVICE_ACCOUNT_FILE and GDRIVE_FOLDER_ID are removed as we are now using GCS.
+# The `google-cloud-storage` library automatically uses GOOGLE_APPLICATION_CREDENTIALS
+# which should be set via Render's Secret Files.
+
+
+# --- Initialize Kite Connect (only if all necessary credentials are available) ---
 kite = None
-if not API_KEY or not ACCESS_TOKEN:
-    logger.critical("KITE_API_KEY or KITE_ACCESS_TOKEN environment variables are not set. KiteConnect will not be initialized.")
-else:
+if KITE_API_KEY and KITE_API_SECRET:
     try:
-        kite = KiteConnect(api_key=API_KEY)
-        kite.set_access_token(ACCESS_TOKEN)
-        logger.info("KiteConnect initialized successfully.")
+        kite = KiteConnect(api_key=KITE_API_KEY)
+        # If you have a persistent access token, set it here.
+        # Otherwise, you'll need a separate login flow to generate it.
+        if KITE_ACCESS_TOKEN:
+            kite.set_access_token(KITE_ACCESS_TOKEN)
+            config_logger.info("KiteConnect initialized with access token.")
+        else:
+            config_logger.warning("KiteConnect initialized, but no access token provided. "
+                                  "Ensure login flow is handled or access token is set.")
     except Exception as e:
-        logger.critical(f"Error initializing KiteConnect: {e}. Check API key and access token. KiteConnect not available.")
-
-# --- Trading Parameters ---
-SL_PERCENT = 0.0075
-TSL_PERCENT = 0.0075
-
-# --- Database File Name ---
-DB_FILE_NAME = 'price_track.db'
-
-# --- Google Cloud Storage (GCS) Configuration ---
-# This is the path where Render mounts your service account file.
-SERVICE_ACCOUNT_FILE = '/etc/secrets/credentials.json'
-
-# This is the name of the GCS bucket you just created.
-# It should be set as an environment variable in Render.
-GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME") # Removed default value as it should always be set via ENV
-
-# --- Check for existence of crucial files/vars at startup ---
-if not os.path.exists(SERVICE_ACCOUNT_FILE):
-    logger.critical(f"Google Service Account file NOT found at expected path: {SERVICE_ACCOUNT_FILE}. GCS sync will likely fail.")
-    SERVICE_ACCOUNT_FILE = None # Set to None to prevent further attempts if file is missing
+        config_logger.error(f"Error initializing KiteConnect: {e}", exc_info=True)
+        kite = None # Ensure kite is None if initialization fails
 else:
-    logger.info(f"Google Service Account file found at: {SERVICE_ACCOUNT_FILE}")
-
-if not GCS_BUCKET_NAME: # Check if the environment variable was actually loaded
-    logger.critical("GCS_BUCKET_NAME environment variable is not set. Google Cloud Storage sync may not work as expected.")
-    # You might want to set GCS_BUCKET_NAME = None here too if you want to explicitly halt GCS operations if not set.
-    # For now, leaving it as is, as the gcs_sync.py module will handle the None check.
+    config_logger.warning("Kite API Key or Secret missing. KiteConnect will not be initialized.")
 
 
-# --- Global Position Tracker ---
+# --- Global State Management ---
+# This dictionary will hold the current position status.
+# It's a mutable object, so changes made to it in other modules will be reflected globally.
 current_position = {
+    "active": False,
     "symbol": None,
-    "side": None,
-    "entry_price": None,
-    "stop_loss": None,
-    "effective_stop_loss": None,
-    "quantity": None,
-    "active": False
+    "direction": None, # "LONG" or "SHORT"
+    "entry_price": 0.0,
+    "quantity": 0,
+    "order_id": None,
+    # Add other relevant position details as needed (e.g., stop loss, target)
 }
+config_logger.info(f"Initial current_position state: {current_position}")
 
-def resolve_token(symbol):
-    """Resolves instrument token for a given trading symbol."""
-    if kite is None:
-        raise Exception("KiteConnect is not initialized. Cannot resolve instrument token.")
-    
-    try:
-        instruments = kite.instruments("NFO")
-    except Exception as e:
-        logger.error(f"Error fetching instruments from Kite: {e}")
-        raise Exception(f"Failed to fetch instruments: {e}")
 
-    for item in instruments:
-        if item["tradingsymbol"] == symbol:
-            logger.info(f"Resolved {symbol} to token {item['instrument_token']}")
-            return item["instrument_token"]
-    logger.error(f"Instrument token not found for symbol: {symbol}")
-    raise Exception(f"Instrument token not found for symbol: {symbol}")
+# --- Other Non-Sensitive Configurations (Examples) ---
+# You can add other configurations here that don't need to be secret
+TRADE_QUANTITY = int(os.environ.get("TRADE_QUANTITY", 1)) # Default to 1 if not set
+SLIPPAGE_TOLERANCE_PERCENT = float(os.environ.get("SLIPPAGE_TOLERANCE_PERCENT", 0.1)) # 0.1%
 
-def set_active_position(symbol, side, entry_price, stop_loss, quantity=750):
-    """
-    Sets or updates the current active position.
-    This function should be called by your order placement logic.
-    """
-    if not all([symbol, side, entry_price, stop_loss is not None]):
-        logger.error(f"Attempted to set active position with incomplete or invalid data: {symbol=}, {side=}, {entry_price=}, {stop_loss=}")
-        return False
+# Database file name (e.g., for SQLite)
+# This can be a relative path, e.g., 'data/price_track.db'
+DB_FILE_NAME = os.environ.get("DB_FILE_NAME", "price_track.db")
 
-    current_position.update({
-        "active": True,
-        "symbol": symbol,
-        "side": side,
-        "entry_price": float(entry_price),
-        "stop_loss": float(stop_loss),
-        "quantity": int(quantity),
-        "effective_stop_loss": float(stop_loss)
-    })
-    logger.info(f"Active position set: {current_position}")
-    return True
+# Stop Loss and Trailing Stop Loss percentages
+# These could also be environment variables if you want to change them without code deploy
+SL_PERCENT = float(os.environ.get("SL_PERCENT", 0.01)) # Example: 1% initial stop loss
+TSL_PERCENT = float(os.environ.get("TSL_PERCENT", 0.005)) # Example: 0.5% trailing stop loss
 
-def clear_active_position():
-    """Clears the active position, typically called after an exit."""
-    current_position.update({
-        "symbol": None,
-        "side": None,
-        "entry_price": None,
-        "stop_loss": None,
-        "effective_stop_loss": None,
-        "quantity": None,
-        "active": False
-    })
-    logger.info("Active position cleared.")
+# New: Historical data and MACD calculation parameters
+HISTORICAL_DAYS_BACK = int(os.environ.get("HISTORICAL_DAYS_BACK", 7)) # Days of historical data to fetch
+CANDLE_INTERVAL = os.environ.get("CANDLE_INTERVAL", "30minute") # Interval for historical candles
+MACD_MIN_CANDLES = int(os.environ.get("MACD_MIN_CANDLES", 26)) # Minimum candles required for MACD calculation
+
+config_logger.info(f"Trade quantity: {TRADE_QUANTITY}")
+config_logger.info(f"Slippage tolerance: {SLIPPAGE_TOLERANCE_PERCENT}%")
+config_logger.info(f"Database file name: {DB_FILE_NAME}")
+config_logger.info(f"Initial Stop Loss percentage: {SL_PERCENT * 100}%")
+config_logger.info(f"Trailing Stop Loss percentage: {TSL_PERCENT * 100}%")
+config_logger.info(f"Historical days back: {HISTORICAL_DAYS_BACK}")
+config_logger.info(f"Candle interval: {CANDLE_INTERVAL}")
+config_logger.info(f"MACD minimum candles: {MACD_MIN_CANDLES}")
