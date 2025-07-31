@@ -7,17 +7,26 @@ from histogram import fetch_histogram
 from price_tracker import load_price_track, save_price_track, init_db
 from gdrive_sync import upload_file  # ✅ Added for Drive upload
 
+
 def is_30min_boundary():
     now = datetime.datetime.now()
     return now.minute % 30 == 0 and now.second < 10
 
+def format_pnl(pnl):
+    if pnl < 0:
+        return f"\033[91m{pnl:.2f}\033[0m"  # Red for negative
+    else:
+        return f"\033[92m{pnl:.2f}\033[0m"  # Green for positive
+
 def monitor_loop():
-    init_db()
+    init_db()  # Initialize SQLite DB
     last_sl_tsl_check_minute = -1
+    last_monitor_minute = -1
 
     while True:
         try:
             now = datetime.datetime.now()
+            minute = now.minute
 
             if current_position["active"]:
                 sym = current_position["symbol"]
@@ -28,22 +37,24 @@ def monitor_loop():
                 stop_loss = current_position["stop_loss"]
                 quantity = current_position.get("quantity", 750)
 
-                # --- PnL Calculation with +/- sign ---
+                # --- PnL Calculation ---
                 pnl = (ltp - entry) * quantity if side == "LONG" else (entry - ltp) * quantity
-                pnl_str = f"\033[91m-{abs(pnl):.2f}\033[0m" if pnl < 0 else f"{pnl:.2f}"
 
-                print(f"\n📈 Monitoring Update @ {now.strftime('%H:%M:%S')}")
-                print(f"Symbol: {sym}")
-                print(f"Side: {side}")
-                print(f"Entry: {entry}")
-                print(f"Current Price: {ltp}")
-                print(f"PnL: {pnl_str}")
+                if minute != last_monitor_minute:
+                    last_monitor_minute = minute
+                    print(f"\n📈 Monitoring Update @ {now.strftime('%H:%M:%S')}")
+                    print(f"Symbol: {sym}")
+                    print(f"Side: {side}")
+                    print(f"Entry: {entry}")
+                    print(f"Current Price: {ltp}")
+                    print(f"PnL: {format_pnl(pnl)}")
 
-                # ===== SL/TSL Check every 5 minutes =====
-                if now.minute % 5 == 0 and now.minute != last_sl_tsl_check_minute:
-                    last_sl_tsl_check_minute = now.minute
-                    print(f"🛡️ SL/TSL Check @ {now.strftime('%H:%M:%S')} | Price: {ltp}")
+                # ===== SL and TSL checks every 5 minutes =====
+                if minute % 5 == 0 and minute != last_sl_tsl_check_minute:
+                    last_sl_tsl_check_minute = minute
+                    print(f"\n🛡️ SL/TSL Check @ {now.strftime('%H:%M:%S')} | Price: {ltp}")
 
+                    # Load previous TSL tracking
                     track = load_price_track()
                     if track.get("highest_price") is None:
                         track["highest_price"] = entry
@@ -86,17 +97,17 @@ def monitor_loop():
                                 exit_position()
                                 continue
 
-                # ===== Histogram Check every 30-min boundary =====
+                # ===== Histogram flip every 30-min boundary =====
                 if is_30min_boundary():
-                    print(f"📊 Histogram flip check @ {now.strftime('%H:%M:%S')}")
+                    print(f"\n📊 Histogram flip check @ {now.strftime('%H:%M:%S')}")
                     result, status = fetch_histogram(sym)
                     if status != "ok" or result is None:
                         print("⚠️ Histogram fetch failed, skipping this cycle.")
                     else:
-                        if side == "LONG" and result.get("cross_to_red"):
+                        if side == "LONG" and result["cross_to_red"]:
                             print("📉 MACD flip to RED — Exiting LONG")
                             exit_position()
-                        elif side == "SHORT" and result.get("cross_to_green"):
+                        elif side == "SHORT" and result["cross_to_green"]:
                             print("📈 MACD flip to GREEN — Exiting SHORT")
                             exit_position()
 
@@ -104,6 +115,7 @@ def monitor_loop():
             print("❌ Monitor error:", e)
 
         time.sleep(60)
+
 
 def start_monitor():
     threading.Thread(target=monitor_loop, daemon=True).start()
