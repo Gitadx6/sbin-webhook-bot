@@ -5,8 +5,8 @@ import datetime
 import logging
 import traceback
 
-# Import shutdown_requested event from app.py for graceful shutdown
-from app import shutdown_requested
+# Import shutdown_requested event from shared_state.py for graceful shutdown
+from shared_state import shutdown_requested
 
 # Configure logging (can be moved to a central logging_config.py if preferred)
 logging.basicConfig(
@@ -307,3 +307,4 @@ if __name__ == "__main__":
         logger.info("Attempting final upload of price_track.db to Google Cloud Storage...")
         upload_file_to_gcs() # This calls the upload_file_to_gcs from gcs_sync.py
         logger.info("Final upload attempt complete.")
+
