@@ -9,3 +9,4 @@ google-auth-oauthlib
 fastapi
 uvicorn
 google-cloud-storage
+pytz
