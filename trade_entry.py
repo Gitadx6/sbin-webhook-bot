@@ -7,7 +7,8 @@ from flask import jsonify
 from config import kite, current_position
 from order_manager import place_order
 # The symbol resolution logic is now centralized in symbol_resolver.
-from symbol_resolver import resolve_token, resolve_future_symbol
+# We now import the correct function name: resolve_current_month_symbol
+from symbol_resolver import resolve_token, resolve_current_month_symbol
 from macd_indicator import is_bullish_crossover, is_bearish_crossover
 
 # Configure logging for this module
@@ -45,7 +46,8 @@ def handle_trade_webhook(data):
             return jsonify({"status": "info", "message": "Already in a trade, ignoring signal."}), 200
 
         # Use the dedicated function from symbol_resolver.py to get the correct futures symbol
-        symbol_to_trade = resolve_future_symbol(base_symbol)
+        # The function name has been corrected to `resolve_current_month_symbol`
+        symbol_to_trade = resolve_current_month_symbol(base_symbol)
         if not symbol_to_trade:
             logger.error(f"Could not resolve a future symbol for base symbol: {base_symbol}")
             return jsonify({"status": "error", "message": f"Could not resolve a future symbol for {base_symbol}"}), 400
