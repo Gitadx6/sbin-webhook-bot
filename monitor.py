@@ -5,10 +5,9 @@ import threading
 import sys
 import os
 import traceback
+import pytz  # New import for timezone handling
 
 from config import kite, DB_FILE_NAME, DB_LOCK_FILE, monitor_frequency, shutdown_requested, current_position, TSL_TRAIL_AMOUNT
-# The `position_manager` module has been refactored. We now only import `fetch_existing_position` and `save_position`.
-# The incorrect import of `update_position` has been removed.
 from position_manager import fetch_existing_position, save_position
 from symbol_resolver import resolve_token
 from order_manager import exit_position, place_order
@@ -23,12 +22,16 @@ def is_market_open():
     """
     Checks if the current time is within market hours (9:15 AM to 3:30 PM IST) for NSE.
     Returns True if open, False otherwise.
+    
+    This function has been updated to handle timezones explicitly to avoid issues
+    with servers running in different timezones.
     """
-    # Assuming IST for simplicity. Timezone handling can be more complex if needed.
-    current_time = datetime.datetime.now().time()
+    ist = pytz.timezone('Asia/Kolkata')
+    current_time_ist = datetime.datetime.now(ist).time()
     market_open = datetime.time(9, 15)
     market_close = datetime.time(15, 30)
-    return market_open <= current_time <= market_close
+    
+    return market_open <= current_time_ist <= market_close
 
 def is_position_active():
     """
