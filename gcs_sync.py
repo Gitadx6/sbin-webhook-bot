@@ -1,65 +1,66 @@
-import os
-import json
+# gcs_sync.py
+This module contains functions for synchronizing files with Google Cloud Storage.
+It includes a function to upload a file to a specified GCS bucket.
+"""
 from google.cloud import storage
+import logging
 
-# Retrieve the bucket name from an environment variable
-# This is a best practice for production environments.
-GCS_BUCKET_NAME = os.environ.get('GCS_BUCKET_NAME')
+# Set up logging for better visibility into the script's actions
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-if not GCS_BUCKET_NAME:
-    raise ValueError("GCS_BUCKET_NAME environment variable is not set.")
-
-def save_state_to_gcs(file_name: str, state: dict):
+def upload_file_to_gcs(bucket_name, source_file_name, destination_blob_name):
     """
-    Saves the bot's state dictionary to a JSON file in a GCS bucket.
-    The bucket name is retrieved from the GCS_BUCKET_NAME environment variable.
-    
+    Uploads a file to the Google Cloud Storage bucket.
+
     Args:
-        file_name (str): The name of the file to save the state to (e.g., 'trading_state.json').
-        state (dict): The dictionary containing the bot's current state.
-    """
-    try:
-        # The Google Cloud client will automatically use the
-        # GOOGLE_APPLICATION_CREDENTIALS provided by the environment.
-        client = storage.Client()
-        bucket = client.bucket(GCS_BUCKET_NAME)
-        blob = bucket.blob(file_name)
-        
-        state_json = json.dumps(state, indent=2)
-
-        blob.upload_from_string(state_json, content_type='application/json')
-        
-        print(f"Successfully saved state to gs://{GCS_BUCKET_NAME}/{file_name}")
-    except Exception as e:
-        # A real bot might implement exponential backoff and retries here.
-        print(f"Error saving state to GCS: {e}")
-
-def load_state_from_gcs(file_name: str) -> dict or None:
-    """
-    Loads the bot's state from a JSON file in a GCS bucket.
-    The bucket name is retrieved from the GCS_BUCKET_NAME environment variable.
-    
-    Args:
-        file_name (str): The name of the file to load the state from.
+        bucket_name (str): The name of the GCS bucket.
+        source_file_name (str): The local path of the file to be uploaded.
+        destination_blob_name (str): The name to give the file in GCS.
     
     Returns:
-        dict or None: The bot's state dictionary if the file exists, otherwise None.
+        bool: True if the upload was successful, False otherwise.
     """
     try:
-        client = storage.Client()
-        bucket = client.bucket(GCS_BUCKET_NAME)
-        blob = bucket.blob(file_name)
+        # Initialize a client
+        storage_client = storage.Client()
+        
+        # Get the bucket object
+        bucket = storage_client.bucket(bucket_name)
+        
+        # Create a blob (the file object in GCS)
+        blob = bucket.blob(destination_blob_name)
+        
+        # Upload the file from the local path
+        blob.upload_from_filename(source_file_name)
+        
+        logging.info(
+            f"File {source_file_name} uploaded to {destination_blob_name} in bucket {bucket_name}."
+        )
+        return True
 
-        if not blob.exists():
-            print(f"No saved state found at gs://{GCS_BUCKET_NAME}/{file_name}")
-            return None
-        
-        state_json = blob.download_as_text()
-        state = json.loads(state_json)
-        
-        print(f"Successfully loaded state from gs://{GCS_BUCKET_NAME}/{file_name}")
-        return state
     except Exception as e:
-        print(f"Error loading state from GCS: {e}")
-        return None
+        logging.error(f"Error uploading file to GCS: {e}")
+        return False
 
+# Example usage (this part is for testing and won't run on import)
+if __name__ == '__main__':
+    # You would need to replace these with your actual bucket and file details
+    # For a local test, create a dummy file named 'test_file.txt'
+    # with some content in the same directory.
+    test_bucket_name = 'your-gcs-bucket-name'
+    test_source_file = 'test_file.txt'
+    test_destination_blob = 'uploaded/test_file.txt'
+    
+    # Check if a dummy file exists before attempting to upload
+    try:
+        with open(test_source_file, 'w') as f:
+            f.write("This is a test file for GCS upload.")
+    except IOError:
+        logging.error(f"Please create a file named {test_source_file} to test the upload.")
+    
+    # Run the upload function
+    upload_success = upload_file_to_gcs(test_bucket_name, test_source_file, test_destination_blob)
+    if upload_success:
+        print("Upload successful.")
+    else:
+        print("Upload failed.")
