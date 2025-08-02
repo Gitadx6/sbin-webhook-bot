@@ -3,8 +3,8 @@ import datetime
 from kiteconnect import KiteConnect
 
 # --- Project-specific Imports ---
-# Make sure to import `kite` from your config.py
-from config import kite
+# Import the entire config module to access the 'instrument' variable
+import config
 
 # Configure logging for this module
 logger = logging.getLogger(__name__)
@@ -33,17 +33,17 @@ def get_expiry_date(month, year):
     d -= datetime.timedelta(days=7)
     return d
 
-def resolve_current_month_symbol(base_symbol):
+def resolve_current_month_symbol():
     """
     Generates the full futures contract symbol for the current or next month's expiry,
-    depending on the rollover logic.
+    based on the rollover logic and the instrument from config.py.
     
-    Args:
-        base_symbol (str): The base symbol (e.g., "SBIN", "NIFTY").
-        
     Returns:
         str: The full futures symbol (e.g., "SBIN24DEC").
     """
+    # Get the base symbol from your config.py file
+    base_symbol = config.instrument
+    
     now = datetime.datetime.now()
     
     # Get the expiry date for the current month
@@ -86,8 +86,12 @@ def resolve_token(symbol):
     Returns:
         int: The instrument token if found, otherwise None.
     """
+    # Assuming 'kite' is imported from your config.py as per your original code.
+    from config import kite
+
     try:
-        instruments = kite.instruments()
+        # Note: For futures, it's more efficient to specify the exchange as 'NFO'
+        instruments = kite.instruments(exchange='NFO')
         for instrument in instruments:
             if instrument['tradingsymbol'] == symbol:
                 return instrument['instrument_token']
@@ -96,4 +100,3 @@ def resolve_token(symbol):
     except Exception as e:
         logger.error(f"Error resolving token for {symbol}: {e}")
         return None
-
