@@ -1,7 +1,7 @@
 import datetime
 import pandas as pd
 from config import kite, current_position, monitor_frequency, TIME_INTERVAL, config_logger
-from bot_utils import get_instrument_token
+from symbol_resolver import resolve_token # Corrected import
 
 # --- Global Variables for Indicator State ---
 # Using a dictionary to hold the last calculated values to avoid recalculation
@@ -94,7 +94,7 @@ def calculate_indicators(symbol):
     Returns:
         dict: A dictionary containing the latest indicator values.
     """
-    token = get_instrument_token(symbol)
+    token = resolve_token(symbol) # Corrected function call
     if not token:
         config_logger.error(f"Could not find instrument token for {symbol}.")
         return None
