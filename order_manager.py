@@ -1,135 +1,115 @@
 import logging
-import traceback
+import datetime
+from kiteconnect import KiteConnect
 
-from config import kite, current_position, TRADE_QUANTITY
-from position_manager import save_position
-from gcs_sync import upload_file_to_gcs
+# Import project-specific configuration
+import config
+# Assuming your `indicator.py` file has a function to fetch indicator values
+from indicator import get_latest_indicators
+from symbol_resolver import SymbolResolver
 
+# Configure logging for this module
 logger = logging.getLogger(__name__)
 
-def place_order(signal_type):
+class OrderManager:
     """
-    Places a new market order based on the signal type.
-    Updates the global position state upon a successful order.
-    Returns the order ID on success, None on failure.
-    """
-    if not kite:
-        logger.error("KiteConnect is not initialized. Cannot place order.")
-        return None
+    Manages order placement based on a combination of EMA crossover and ADX.
+
+    This class fetches indicator values from the `indicator.py` file and then
+    places orders according to a predefined strategy.
     
-    # Check if a position is already active to prevent double-entry
-    if current_position.get("active", False):
-        logger.warning("Attempted to place a new order while a position is active. Aborting.")
-        return None
+    Strategy:
+    - BUY: EMA(9) crosses above EMA(21) AND ADX >= 20
+    - SELL: EMA(9) crosses below EMA(21) AND ADX >= 20
+    """
 
-    # Determine order parameters
-    if signal_type == "LONG":
-        transaction_type = "BUY"
-    elif signal_type == "SHORT":
-        transaction_type = "SELL"
-    else:
-        logger.error(f"Invalid signal_type for order placement: {signal_type}")
-        return None
-
-    try:
-        # Resolve the instrument token
-        instrument_token = kite.instruments("NFO", [current_position["symbol"]])[0]['instrument_token']
-
-        # Place the order
-        order = kite.place_order(
-            variety="regular",
-            exchange="NFO",
-            tradingsymbol=current_position["symbol"],
-            transaction_type=transaction_type,
-            quantity=TRADE_QUANTITY,
-            product="NRML",
-            order_type="MARKET",
-            validity="DAY"
-        )
-        logger.info(f"✅ Order placed successfully! Order ID: {order['order_id']}")
-
-        # Update the global position state
-        current_position.update({
-            "active": True,
-            "side": signal_type,
-            "quantity": TRADE_QUANTITY,
-            "order_id": order["order_id"],
-            # Entry price and SL will be updated by the monitor loop after the order is filled
-            "entry_price": 0.0,
-            "initial_sl": 0.0,
-        })
-        save_position(current_position)
-        upload_file_to_gcs()
+    def __init__(self, kite_client: KiteConnect):
+        """
+        Initializes the OrderManager with a KiteConnect client.
         
-        return order["order_id"]
+        Args:
+            kite_client (KiteConnect): An authenticated KiteConnect client instance.
+        """
+        self.kite = kite_client
+        # Instantiate SymbolResolver with the kite client
+        self.symbol_resolver = SymbolResolver(kite_client)
+        logger.info("OrderManager initialized.")
 
-    except Exception as e:
-        logger.error(f"Failed to place order for {current_position['symbol']}: {e}\n{traceback.format_exc()}")
-        return None
+    def check_and_place_order(self):
+        """
+        Checks for trading conditions and places an order if a signal is generated.
+        
+        This method automatically uses the instrument and other parameters from config.py.
+        """
+        try:
+            # 1. Get the current trading symbol and instrument token
+            trading_symbol = self.symbol_resolver.resolve_current_month_symbol()
+            instrument_token = self.symbol_resolver.resolve_token(trading_symbol)
 
-def exit_position():
-    """
-    Exits the currently active position by placing a market order with the opposite transaction type.
-    Resets the global position state upon a successful exit.
-    """
-    if not kite:
-        logger.error("KiteConnect not initialized. Cannot exit position.")
-        return
+            if not instrument_token:
+                logger.error(f"Could not resolve instrument token for {trading_symbol}. Aborting.")
+                return
 
-    # Check if there is an active position with a non-zero quantity to exit
-    if not current_position.get("active", False) or current_position.get("quantity", 0) == 0:
-        logger.warning("No active position or zero quantity to exit. Aborting exit.")
-        # Ensure state is reset even if there was a phantom position
-        reset_position_state()
-        return
+            # 2. Fetch historical data to pass to the indicator module
+            # We need to fetch enough data for the indicators to be calculated
+            end_date = datetime.date.today()
+            start_date = end_date - datetime.timedelta(days=60)
+            
+            historical_data = self.kite.historical_data(instrument_token, start_date, end_date, 'day')
+            
+            if not historical_data:
+                logger.warning("No historical data found. Cannot place order.")
+                return
 
-    # Determine the transaction type to exit the position
-    if current_position["side"] == "LONG":
-        transaction_type = "SELL"
-    elif current_position["side"] == "SHORT":
-        transaction_type = "BUY"
-    else:
-        logger.error("Cannot exit position. Invalid 'side' found in current_position.")
-        reset_position_state()
-        return
+            # 3. Get latest indicator values from the `indicator.py` module
+            # Assumes `get_latest_indicators` returns a tuple of (last_ema9, prev_ema9, last_ema21, prev_ema21, last_adx)
+            last_ema9, prev_ema9, last_ema21, prev_ema21, last_adx = get_latest_indicators(historical_data)
 
-    try:
-        # Place the exit order
-        order = kite.place_order(
-            variety="regular",
-            exchange="NFO",
-            tradingsymbol=current_position["symbol"],
-            transaction_type=transaction_type,
-            quantity=current_position["quantity"],
-            product="NRML",
-            order_type="MARKET",
-            validity="DAY"
-        )
-        logger.info(f"✅ Exit order placed successfully for {current_position['symbol']}. Order ID: {order['order_id']}")
+            logger.info(f"Checking conditions for {trading_symbol}...")
+            logger.info(f"Last EMA9: {last_ema9:.2f}, Prev EMA9: {prev_ema9:.2f}")
+            logger.info(f"Last EMA21: {last_ema21:.2f}, Prev EMA21: {prev_ema21:.2f}")
+            logger.info(f"Last ADX: {last_adx:.2f}")
 
-    except Exception as e:
-        logger.error(f"Failed to place exit order for {current_position['symbol']}: {e}\n{traceback.format_exc()}")
-    
-    finally:
-        # Always reset the position state, whether the order succeeded or failed,
-        # to prevent the monitor from getting stuck in an infinite loop.
-        reset_position_state()
+            # 4. Check for a buy signal
+            # EMA(9) crosses above EMA(21) AND ADX is strong
+            if (prev_ema9 <= prev_ema21 and last_ema9 > last_ema21) and (last_adx >= 20):
+                logger.info("BUY signal detected! Placing a market order...")
+                # Place a buy order
+                try:
+                    order_id = self.kite.place_order(
+                        tradingsymbol=trading_symbol,
+                        exchange=self.kite.EXCHANGE_NFO,
+                        transaction_type=self.kite.TRANSACTION_TYPE_BUY,
+                        quantity=config.lotsize,
+                        product=config.product,
+                        order_type=self.kite.ORDER_TYPE_MARKET,
+                        variety=config.variety,
+                    )
+                    logger.info(f"Buy order placed successfully. Order ID: {order_id}")
+                except Exception as e:
+                    logger.error(f"Failed to place buy order: {e}", exc_info=True)
 
-def reset_position_state():
-    """
-    Resets the global current_position to its default, inactive state.
-    Also saves this state to the database and syncs to GCS.
-    """
-    current_position.update({
-        "symbol": "",
-        "token": None,
-        "side": "NONE",
-        "active": False,
-        "quantity": 0,
-        "entry_price": 0.0,
-        "initial_sl": 0.0,
-        "effective_sl": None,
-    })
-    save_position(current_position)
-    upload_file_to_gcs()
-    logger.info("Global position state has been reset.")
+            # 5. Check for a sell signal
+            # EMA(9) crosses below EMA(21) AND ADX is strong
+            elif (prev_ema9 >= prev_ema21 and last_ema9 < last_ema21) and (last_adx >= 20):
+                logger.info("SELL signal detected! Placing a market order...")
+                # Place a sell order
+                try:
+                    order_id = self.kite.place_order(
+                        tradingsymbol=trading_symbol,
+                        exchange=self.kite.EXCHANGE_NFO,
+                        transaction_type=self.kite.TRANSACTION_TYPE_SELL,
+                        quantity=config.lotsize,
+                        product=config.product,
+                        order_type=self.kite.ORDER_TYPE_MARKET,
+                        variety=config.variety,
+                    )
+                    logger.info(f"Sell order placed successfully. Order ID: {order_id}")
+                except Exception as e:
+                    logger.error(f"Failed to place sell order: {e}", exc_info=True)
+            
+            else:
+                logger.info("No trading signal detected based on the strategy.")
+
+        except Exception as e:
+            logger.error(f"An error occurred during order processing: {e}", exc_info=True)
