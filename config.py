@@ -19,6 +19,9 @@ Instrument = "SBIN"
 TRADE_QUANTITY = int(os.environ.get("TRADE_QUANTITY", 750))
 monitor_frequency = float(os.environ.get("MONITOR_FREQUENCY", 15.0))  # seconds
 
+# Time interval for chart data used by indicators (e.g., "minute", "3minute", "5minute", "15minute")
+TIME_INTERVAL = os.environ.get("TIME_INTERVAL", "5minute")
+
 # Stop Loss and Trailing Stop Loss configurations
 # We use both a percentage-based and a fixed-point TSL for different logic
 SL_PERCENT = float(os.environ.get("SL_PERCENT", 0.01)) # 1% initial stop loss for calculations
