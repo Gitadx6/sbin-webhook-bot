@@ -1,115 +1,141 @@
-import logging
 import datetime
-from kiteconnect import KiteConnect
+import pandas as pd
+from config import kite, current_position, monitor_frequency, TIME_INTERVAL, config_logger
+from bot_utils import get_instrument_token
 
-# Import project-specific configuration
-import config
-# Assuming your `indicator.py` file has a function to fetch indicator values
-from indicator import get_latest_indicators
-from symbol_resolver import SymbolResolver
+# --- Global Variables for Indicator State ---
+# Using a dictionary to hold the last calculated values to avoid recalculation
+last_indicator_values = {
+    "RSI_VALUE": None,
+    "EMA_SHORT": None,
+    "EMA_LONG": None
+}
 
-# Configure logging for this module
-logger = logging.getLogger(__name__)
-
-class OrderManager:
+# --- Indicator Calculation Functions ---
+def calculate_rsi(data, window=14):
     """
-    Manages order placement based on a combination of EMA crossover and ADX.
+    Calculates the Relative Strength Index (RSI).
 
-    This class fetches indicator values from the `indicator.py` file and then
-    places orders according to a predefined strategy.
-    
-    Strategy:
-    - BUY: EMA(9) crosses above EMA(21) AND ADX >= 20
-    - SELL: EMA(9) crosses below EMA(21) AND ADX >= 20
+    Args:
+        data (pd.DataFrame): DataFrame with 'close' prices.
+        window (int): The number of periods to use for the RSI calculation.
+
+    Returns:
+        float: The latest RSI value.
     """
+    delta = data['close'].diff()
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
 
-    def __init__(self, kite_client: KiteConnect):
-        """
-        Initializes the OrderManager with a KiteConnect client.
-        
-        Args:
-            kite_client (KiteConnect): An authenticated KiteConnect client instance.
-        """
-        self.kite = kite_client
-        # Instantiate SymbolResolver with the kite client
-        self.symbol_resolver = SymbolResolver(kite_client)
-        logger.info("OrderManager initialized.")
+    avg_gain = gain.ewm(com=window - 1, min_periods=window).mean()
+    avg_loss = loss.ewm(com=window - 1, min_periods=window).mean()
 
-    def check_and_place_order(self):
-        """
-        Checks for trading conditions and places an order if a signal is generated.
-        
-        This method automatically uses the instrument and other parameters from config.py.
-        """
-        try:
-            # 1. Get the current trading symbol and instrument token
-            trading_symbol = self.symbol_resolver.resolve_current_month_symbol()
-            instrument_token = self.symbol_resolver.resolve_token(trading_symbol)
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi.iloc[-1]
 
-            if not instrument_token:
-                logger.error(f"Could not resolve instrument token for {trading_symbol}. Aborting.")
-                return
+def calculate_ema(data, window=12):
+    """
+    Calculates the Exponential Moving Average (EMA).
 
-            # 2. Fetch historical data to pass to the indicator module
-            # We need to fetch enough data for the indicators to be calculated
-            end_date = datetime.date.today()
-            start_date = end_date - datetime.timedelta(days=60)
-            
-            historical_data = self.kite.historical_data(instrument_token, start_date, end_date, 'day')
-            
-            if not historical_data:
-                logger.warning("No historical data found. Cannot place order.")
-                return
+    Args:
+        data (pd.DataFrame): DataFrame with 'close' prices.
+        window (int): The number of periods to use for the EMA calculation.
 
-            # 3. Get latest indicator values from the `indicator.py` module
-            # Assumes `get_latest_indicators` returns a tuple of (last_ema9, prev_ema9, last_ema21, prev_ema21, last_adx)
-            last_ema9, prev_ema9, last_ema21, prev_ema21, last_adx = get_latest_indicators(historical_data)
+    Returns:
+        float: The latest EMA value.
+    """
+    ema = data['close'].ewm(span=window, adjust=False).mean()
+    return ema.iloc[-1]
 
-            logger.info(f"Checking conditions for {trading_symbol}...")
-            logger.info(f"Last EMA9: {last_ema9:.2f}, Prev EMA9: {prev_ema9:.2f}")
-            logger.info(f"Last EMA21: {last_ema21:.2f}, Prev EMA21: {prev_ema21:.2f}")
-            logger.info(f"Last ADX: {last_adx:.2f}")
+def get_historical_data(symbol, token):
+    """
+    Fetches historical data for a given symbol.
 
-            # 4. Check for a buy signal
-            # EMA(9) crosses above EMA(21) AND ADX is strong
-            if (prev_ema9 <= prev_ema21 and last_ema9 > last_ema21) and (last_adx >= 20):
-                logger.info("BUY signal detected! Placing a market order...")
-                # Place a buy order
-                try:
-                    order_id = self.kite.place_order(
-                        tradingsymbol=trading_symbol,
-                        exchange=self.kite.EXCHANGE_NFO,
-                        transaction_type=self.kite.TRANSACTION_TYPE_BUY,
-                        quantity=config.lotsize,
-                        product=config.product,
-                        order_type=self.kite.ORDER_TYPE_MARKET,
-                        variety=config.variety,
-                    )
-                    logger.info(f"Buy order placed successfully. Order ID: {order_id}")
-                except Exception as e:
-                    logger.error(f"Failed to place buy order: {e}", exc_info=True)
+    Args:
+        symbol (str): The trading symbol (e.g., "SBIN").
+        token (str): The instrument token.
 
-            # 5. Check for a sell signal
-            # EMA(9) crosses below EMA(21) AND ADX is strong
-            elif (prev_ema9 >= prev_ema21 and last_ema9 < last_ema21) and (last_adx >= 20):
-                logger.info("SELL signal detected! Placing a market order...")
-                # Place a sell order
-                try:
-                    order_id = self.kite.place_order(
-                        tradingsymbol=trading_symbol,
-                        exchange=self.kite.EXCHANGE_NFO,
-                        transaction_type=self.kite.TRANSACTION_TYPE_SELL,
-                        quantity=config.lotsize,
-                        product=config.product,
-                        order_type=self.kite.ORDER_TYPE_MARKET,
-                        variety=config.variety,
-                    )
-                    logger.info(f"Sell order placed successfully. Order ID: {order_id}")
-                except Exception as e:
-                    logger.error(f"Failed to place sell order: {e}", exc_info=True)
-            
-            else:
-                logger.info("No trading signal detected based on the strategy.")
+    Returns:
+        pd.DataFrame: A DataFrame containing the historical OHLC data, or None on error.
+    """
+    to_date = datetime.date.today()
+    from_date = to_date - datetime.timedelta(days=20) # Fetch enough data for 14-period RSI and EMAs
 
-        except Exception as e:
-            logger.error(f"An error occurred during order processing: {e}", exc_info=True)
+    try:
+        # Use the TIME_INTERVAL variable for chart data from config.py
+        data = kite.historical_data(
+            instrument_token=token,
+            from_date=from_date,
+            to_date=to_date,
+            interval=TIME_INTERVAL,
+            continuous=False,
+            oci=False
+        )
+        if not data:
+            config_logger.warning(f"No historical data returned for {symbol}.")
+            return None
+
+        df = pd.DataFrame(data)
+        df.set_index('date', inplace=True)
+        return df
+
+    except Exception as e:
+        config_logger.error(f"Failed to fetch historical data for {symbol}: {e}", exc_info=True)
+        return None
+
+def calculate_indicators(symbol):
+    """
+    Main function to calculate and update all necessary indicators.
+
+    Args:
+        symbol (str): The trading symbol.
+
+    Returns:
+        dict: A dictionary containing the latest indicator values.
+    """
+    token = get_instrument_token(symbol)
+    if not token:
+        config_logger.error(f"Could not find instrument token for {symbol}.")
+        return None
+
+    data = get_historical_data(symbol, token)
+    if data is None:
+        return None
+
+    try:
+        last_indicator_values["RSI_VALUE"] = calculate_rsi(data)
+        last_indicator_values["EMA_SHORT"] = calculate_ema(data, window=12)
+        last_indicator_values["EMA_LONG"] = calculate_ema(data, window=26)
+        config_logger.info(f"Indicators calculated: RSI={last_indicator_values['RSI_VALUE']:.2f}, EMA_Short={last_indicator_values['EMA_SHORT']:.2f}, EMA_Long={last_indicator_values['EMA_LONG']:.2f}")
+
+        return last_indicator_values
+    except Exception as e:
+        config_logger.error(f"Error calculating indicators: {e}", exc_info=True)
+        return None
+
+def check_entry_signal():
+    """
+    Checks for a buy or sell signal based on indicator values.
+
+    Returns:
+        str: 'BUY', 'SELL', or 'NONE'.
+    """
+    if last_indicator_values["RSI_VALUE"] is None or \
+       last_indicator_values["EMA_SHORT"] is None or \
+       last_indicator_values["EMA_LONG"] is None:
+        config_logger.warning("Indicators not yet calculated. Cannot check for signals.")
+        return 'NONE'
+
+    # Example strategy:
+    # BUY signal: Short EMA crosses above Long EMA AND RSI is below 70 (not overbought)
+    # SELL signal: Short EMA crosses below Long EMA AND RSI is above 30 (not oversold)
+
+    if last_indicator_values["EMA_SHORT"] > last_indicator_values["EMA_LONG"] and \
+       last_indicator_values["RSI_VALUE"] < 70:
+        return 'BUY'
+    elif last_indicator_values["EMA_SHORT"] < last_indicator_values["EMA_LONG"] and \
+         last_indicator_values["RSI_VALUE"] > 30:
+        return 'SELL'
+    else:
+        return 'NONE'
