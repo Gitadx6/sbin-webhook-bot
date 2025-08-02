@@ -9,9 +9,14 @@ KITE_API_KEY = os.environ.get("KITE_API_KEY")
 KITE_API_SECRET = os.environ.get("KITE_API_SECRET")
 KITE_ACCESS_TOKEN = os.environ.get("KITE_ACCESS_TOKEN")
 
+# Trading instrument
+# This defines the base index (e.g., "NIFTY") that the symbol_resolver.py
+# will use to find the correct futures contract.
+Instrument = "SBIN"
+
 # Bot settings
 # The lot size for SBIN futures is 750
-TRADE_QUANTITY = int(os.environ.get("TRADE_QUANTITY", 750)) 
+TRADE_QUANTITY = int(os.environ.get("TRADE_QUANTITY", 750))
 monitor_frequency = float(os.environ.get("MONITOR_FREQUENCY", 15.0))  # seconds
 
 # Stop Loss and Trailing Stop Loss configurations
