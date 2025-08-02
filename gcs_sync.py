@@ -1,4 +1,5 @@
 # gcs_sync.py
+"""
 This module contains functions for synchronizing files with Google Cloud Storage.
 It includes a function to upload a file to a specified GCS bucket.
 """
