@@ -1,141 +1,65 @@
-from google.cloud import storage
 import os
-import logging
-import traceback
+import json
+from google.cloud import storage
 
-# Import configuration from config.py
-# Make sure DB_FILE_NAME and GCS_BUCKET_NAME are defined in config.py
-from config import DB_FILE_NAME, GCS_BUCKET_NAME
+# Retrieve the bucket name from an environment variable
+# This is a best practice for production environments.
+GCS_BUCKET_NAME = os.environ.get('GCS_BUCKET_NAME')
 
-# Configure logging for this module
-logger = logging.getLogger(__name__) # Use the logger configured in app.py or monitor.py
+if not GCS_BUCKET_NAME:
+    raise ValueError("GCS_BUCKET_NAME environment variable is not set.")
 
-def get_gcs_client():
+def save_state_to_gcs(file_name: str, state: dict):
     """
-    Authenticates with Google Cloud Storage and returns a client.
-    It implicitly uses GOOGLE_APPLICATION_CREDENTIALS environment variable.
+    Saves the bot's state dictionary to a JSON file in a GCS bucket.
+    The bucket name is retrieved from the GCS_BUCKET_NAME environment variable.
+    
+    Args:
+        file_name (str): The name of the file to save the state to (e.g., 'trading_state.json').
+        state (dict): The dictionary containing the bot's current state.
     """
     try:
-        # The storage.Client() constructor will automatically look for credentials
-        # in the environment, including the path specified by GOOGLE_APPLICATION_CREDENTIALS.
+        # The Google Cloud client will automatically use the
+        # GOOGLE_APPLICATION_CREDENTIALS provided by the environment.
         client = storage.Client()
-        logger.debug("Google Cloud Storage client initialized.")
-        return client
-    except Exception as e:
-        logger.error(f"Error initializing Google Cloud Storage client: {e}\n{traceback.format_exc()}")
-        return None
-
-def upload_file_to_gcs():
-    """
-    Uploads the local DB_FILE_NAME to a specified Google Cloud Storage bucket.
-    If the file exists in the bucket, it overwrites it.
-    Returns True on success, False on failure.
-    """
-    client = get_gcs_client()
-    if not client:
-        logger.error("Google Cloud Storage client not available for upload. Skipping upload.")
-        return False
-
-    if not GCS_BUCKET_NAME:
-        logger.error("GCS_BUCKET_NAME is not configured. Cannot upload file.")
-        return False
-
-    if not os.path.exists(DB_FILE_NAME):
-        logger.warning(f"Local database file '{DB_FILE_NAME}' not found for upload. Skipping upload.")
-        return False
-
-    try:
         bucket = client.bucket(GCS_BUCKET_NAME)
-        blob = bucket.blob(DB_FILE_NAME) # The object name in GCS will be the same as local file name
+        blob = bucket.blob(file_name)
+        
+        state_json = json.dumps(state, indent=2)
 
-        # Upload the file, overwriting if it exists
-        blob.upload_from_filename(DB_FILE_NAME)
-        logger.info(f"Successfully uploaded '{DB_FILE_NAME}' to GCS bucket '{GCS_BUCKET_NAME}'.")
-        return True
-
+        blob.upload_from_string(state_json, content_type='application/json')
+        
+        print(f"Successfully saved state to gs://{GCS_BUCKET_NAME}/{file_name}")
     except Exception as e:
-        logger.error(f"Failed to upload '{DB_FILE_NAME}' to GCS bucket '{GCS_BUCKET_NAME}': {e}\n{traceback.format_exc()}")
-        return False
+        # A real bot might implement exponential backoff and retries here.
+        print(f"Error saving state to GCS: {e}")
 
-def download_file_from_gcs():
+def load_state_from_gcs(file_name: str) -> dict or None:
     """
-    Downloads DB_FILE_NAME from Google Cloud Storage to the local filesystem.
-    Returns True on successful download or if file doesn't exist in GCS (meaning new local DB needed),
-    False on error during download.
+    Loads the bot's state from a JSON file in a GCS bucket.
+    The bucket name is retrieved from the GCS_BUCKET_NAME environment variable.
+    
+    Args:
+        file_name (str): The name of the file to load the state from.
+    
+    Returns:
+        dict or None: The bot's state dictionary if the file exists, otherwise None.
     """
-    client = get_gcs_client()
-    if not client:
-        logger.error("Google Cloud Storage client not available for download. Cannot attempt download.")
-        return False
-
-    if not GCS_BUCKET_NAME:
-        logger.error("GCS_BUCKET_NAME is not configured. Cannot download file.")
-        return False
-
     try:
+        client = storage.Client()
         bucket = client.bucket(GCS_BUCKET_NAME)
-        blob = bucket.blob(DB_FILE_NAME)
+        blob = bucket.blob(file_name)
 
         if not blob.exists():
-            logger.warning(f"'{DB_FILE_NAME}' not found in GCS bucket '{GCS_BUCKET_NAME}'. A new local DB will be used/created.")
-            return True # Not an error, just means no existing file to download.
-
-        # Ensure the directory for the DB file exists if DB_FILE_NAME includes a path
-        db_dir = os.path.dirname(DB_FILE_NAME)
-        if db_dir and not os.path.exists(db_dir):
-            os.makedirs(db_dir, exist_ok=True)
-
-        # Download the file
-        blob.download_to_filename(DB_FILE_NAME)
-        logger.info(f"Successfully downloaded '{DB_FILE_NAME}' from GCS bucket '{GCS_BUCKET_NAME}'.")
-        return True
-
+            print(f"No saved state found at gs://{GCS_BUCKET_NAME}/{file_name}")
+            return None
+        
+        state_json = blob.download_as_text()
+        state = json.loads(state_json)
+        
+        print(f"Successfully loaded state from gs://{GCS_BUCKET_NAME}/{file_name}")
+        return state
     except Exception as e:
-        logger.error(f"Failed to download '{DB_FILE_NAME}' from GCS bucket '{GCS_BUCKET_NAME}': {e}\n{traceback.format_exc()}")
-        return False
+        print(f"Error loading state from GCS: {e}")
+        return None
 
-# Example usage (for local testing)
-if __name__ == "__main__":
-    # Ensure you have GOOGLE_APPLICATION_CREDENTIALS set in your environment
-    # or a service account key file named 'service_account_key.json' in the same directory
-    # and GOOGLE_APPLICATION_CREDENTIALS pointing to it.
-    # Also set a dummy GCS_BUCKET_NAME for testing
-    os.environ["GCS_BUCKET_NAME"] = "your-test-bucket-name" # Replace with a real bucket for testing
-
-    # Create a dummy file to upload
-    with open("test_db.db", "w") as f:
-        f.write("This is some dummy database content.")
-    
-    # Temporarily set DB_FILE_NAME for testing this module
-    original_db_file_name = DB_FILE_NAME
-    DB_FILE_NAME = "test_db.db"
-
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-    logger.info("--- Testing GCS Sync Module ---")
-
-    # Test Upload
-    logger.info("Attempting to upload test_db.db...")
-    if upload_file_to_gcs():
-        logger.info("Upload test successful.")
-    else:
-        logger.error("Upload test failed.")
-
-    # Clean up local dummy file
-    if os.path.exists("test_db.db"):
-        os.remove("test_db.db")
-        logger.info("Removed local test_db.db after upload test.")
-
-    # Test Download
-    logger.info("Attempting to download test_db.db...")
-    if download_file_from_gcs():
-        logger.info("Download test successful.")
-        if os.path.exists("test_db.db"):
-            with open("test_db.db", "r") as f:
-                content = f.read()
-            logger.info(f"Downloaded file content: '{content}'")
-            os.remove("test_db.db") # Clean up downloaded file
-    else:
-        logger.error("Download test failed.")
-
-    # Restore original DB_FILE_NAME
-    DB_FILE_NAME = original_db_file_name
