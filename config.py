@@ -22,7 +22,7 @@ except Exception as e:
 
 # --- Global Trading Parameters ---
 # The symbol you want to trade
-Instrument = "RELIANCE"
+Instrument = "SBIN"
 
 # The quantity for each trade
 TRADE_QUANTITY = 1
@@ -57,3 +57,4 @@ current_position = {
 
 # Threading event for graceful shutdown
 shutdown_requested = threading.Event()
+
