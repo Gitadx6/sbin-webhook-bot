@@ -9,6 +9,7 @@ from config import (
 from indicators import calculate_rsi, calculate_atr
 from patterns import is_bullish_engulfing, is_bearish_engulfing
 from kite_client import KiteClient
+from symbol_resolver import resolve_current_month_symbol, resolve_token # Import the new functions
 
 # --- Global State from config.py ---
 from config import current_position, shutdown_requested
@@ -23,31 +24,31 @@ class LiveTradingBot:
         self.atr_values = None
         self.logger = logging.getLogger(__name__)
         self.instrument_token = None
-    
-    def resolve_instrument(self):
-        """
-        Finds the instrument token for the trading symbol.
-        """
-        try:
-            instruments = self.client.kite.instruments("NSE")
-            for inst in instruments:
-                if inst['tradingsymbol'] == Instrument:
-                    self.instrument_token = inst['instrument_token']
-                    self.logger.info(f"Resolved instrument token for {Instrument}: {self.instrument_token}")
-                    return True
-            self.logger.error(f"Could not find instrument token for {Instrument}")
-            return False
-        except Exception as e:
-            self.logger.error(f"Error resolving instrument token: {e}", exc_info=True)
-            return False
+        self.futures_symbol = None
     
     def initialize(self):
         """
         Initializes the bot by fetching historical data to prime the indicators.
+        Resolves the correct futures contract instrument token.
         """
-        if not self.resolve_instrument():
+        self.logger.info("Resolving futures contract instrument token...")
+        
+        # Use the functions from symbol_resolver.py to get the symbol and token
+        self.futures_symbol = resolve_current_month_symbol()
+        
+        if not self.futures_symbol:
+            self.logger.error(f"Could not resolve a tradable futures symbol for {Instrument}.")
             return False
         
+        self.instrument_token = resolve_token(self.futures_symbol)
+        
+        if not self.instrument_token:
+            self.logger.error(f"Could not resolve instrument token for {self.futures_symbol}.")
+            return False
+            
+        self.logger.info(f"Resolved instrument token {self.instrument_token} for futures symbol: {self.futures_symbol}")
+        
+        # Fetch historical data using the resolved token
         end_date = datetime.datetime.now()
         start_date = end_date - datetime.timedelta(days=30)
         self.historical_data = self.client.get_historical_data(
@@ -56,7 +57,7 @@ class LiveTradingBot:
         if self.historical_data.empty:
             self.logger.error("Failed to fetch historical data. Exiting.")
             return False
-        
+            
         self.logger.info("Historical data loaded. Calculating initial indicators.")
         self.rsi_values = calculate_rsi(self.historical_data['close'], RSI_PERIOD)
         self.atr_values = calculate_atr(self.historical_data, ATR_PERIOD)
@@ -65,17 +66,17 @@ class LiveTradingBot:
 
     def check_initial_position(self):
         """
-        NEW: Checks the Kite API for any existing positions on startup.
+        Checks the Kite API for any existing positions on startup.
         """
         try:
             positions = self.client.kite.positions().get('net', [])
             for pos in positions:
-                if pos['tradingsymbol'] == Instrument and pos['quantity'] != 0:
-                    self.logger.info(f"Found active position for {Instrument} from Kite API.")
+                if pos['tradingsymbol'] == self.futures_symbol and pos['quantity'] != 0:
+                    self.logger.info(f"Found active position for {self.futures_symbol} from Kite API.")
                     
                     # Update global position state based on API data
                     current_position.update({
-                        "symbol": Instrument,
+                        "symbol": pos['tradingsymbol'], # Use the actual tradingsymbol from the API
                         "token": pos['instrument_token'],
                         "side": "LONG" if pos['quantity'] > 0 else "SHORT",
                         "active": True,
@@ -90,14 +91,14 @@ class LiveTradingBot:
         except Exception as e:
             self.logger.error(f"Error checking initial position from API: {e}", exc_info=True)
             return False
-    
+            
     def check_entry_conditions(self):
         """
         Checks for bullish and bearish divergence entry conditions.
         """
         if current_position["active"]:
             return
-        
+            
         last_n_candles = self.historical_data.iloc[-6:]
         current_candle = last_n_candles.iloc[-1].to_dict()
         current_rsi = self.rsi_values.iloc[-1]
@@ -114,7 +115,7 @@ class LiveTradingBot:
                 self.logger.info(f"Bullish Divergence detected at {current_candle['date']}. Placing BUY order.")
                 self.client.place_order(self.instrument_token, 'BUY', TRADE_QUANTITY)
                 current_position.update({
-                    "symbol": Instrument,
+                    "symbol": self.futures_symbol,
                     "token": self.instrument_token,
                     "side": "LONG",
                     "active": True,
@@ -138,7 +139,7 @@ class LiveTradingBot:
                     self.logger.info(f"Bearish Divergence detected at {current_candle['date']}. Placing SELL order.")
                     self.client.place_order(self.instrument_token, 'SELL', TRADE_QUANTITY)
                     current_position.update({
-                        "symbol": Instrument,
+                        "symbol": self.futures_symbol,
                         "token": self.instrument_token,
                         "side": "SHORT",
                         "active": True,
@@ -155,7 +156,7 @@ class LiveTradingBot:
         """
         if not current_position["active"]:
             return
-        
+            
         current_candle = self.historical_data.iloc[-1].to_dict()
 
         if current_position["side"] == 'LONG':
