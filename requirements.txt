@@ -10,3 +10,6 @@ fastapi
 uvicorn
 google-cloud-storage
 pytz
+pandas
+numpy
+python-dotenv
