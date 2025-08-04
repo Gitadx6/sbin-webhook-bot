@@ -47,14 +47,19 @@ class KiteClient:
             to_date = datetime.datetime.now()
             from_date = to_date - datetime.timedelta(minutes=30) # Fetch enough data to be safe
             raw_data = self.kite.historical_data(instrument_token, from_date, to_date, interval, continuous=False)
-            df = pd.DataFrame(raw_data)
-            df['date'] = pd.to_datetime(df['date'])
-            df.set_index('date', inplace=True)
             
-            if not df.empty:
+            # --- FIX: Check if the data is not empty before processing it ---
+            if raw_data:
+                df = pd.DataFrame(raw_data)
+                df['date'] = pd.to_datetime(df['date'])
+                df.set_index('date', inplace=True)
+                
+                # The most recent completed candle is the last one in the list
                 return df.iloc[-1].to_dict()
             else:
+                self.logger.info("No new candles found in the last 30 minutes.")
                 return None
+                
         except Exception as e:
             self.logger.error(f"Error fetching live data: {e}", exc_info=True)
             return None
