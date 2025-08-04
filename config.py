@@ -22,7 +22,7 @@ except Exception as e:
 
 # --- Global Trading Parameters ---
 # The symbol you want to trade
-Instrument = "SBIN"
+Instrument = "RELIANCE"
 
 # The quantity for each trade
 TRADE_QUANTITY = 1
