@@ -1,5 +1,6 @@
 import os
 import logging
+import threading
 from kiteconnect import KiteConnect
 from dotenv import load_dotenv
 
@@ -21,7 +22,7 @@ except Exception as e:
 
 # --- Global Trading Parameters ---
 # The symbol you want to trade
-Instrument = "RELIANCE"
+Instrument = "SBIN"
 
 # The quantity for each trade
 TRADE_QUANTITY = 1
@@ -42,7 +43,7 @@ TRAILING_STOP_MULTIPLIER = 1.0
 
 # --- Global State Dictionaries ---
 # This dictionary will hold the state of the current position.
-# We are no longer loading this from a file. The bot will check the API.
+# We are no longer loading this from a file.
 current_position = {
     "symbol": None,
     "token": None,
