@@ -54,8 +54,12 @@ class KiteClient:
                 df['date'] = pd.to_datetime(df['date'])
                 df.set_index('date', inplace=True)
                 
-                # The most recent completed candle is the last one in the list
-                return df.iloc[-1].to_dict()
+                # --- FIX: Create a dictionary that includes the date from the index ---
+                # Get the last candle and its date from the index
+                latest_candle_data = df.iloc[-1].to_dict()
+                latest_candle_data['date'] = df.index[-1]
+                
+                return latest_candle_data
             else:
                 self.logger.info("No new candles found in the last 30 minutes.")
                 return None
