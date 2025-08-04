@@ -42,7 +42,7 @@ def resolve_current_month_symbol():
         str: The full futures symbol (e.g., "SBIN24DEC").
     """
     # Get the base symbol from your config.py file
-    base_symbol = config.instrument
+    base_symbol = config.Instrument
     
     now = datetime.datetime.now()
     
@@ -100,3 +100,4 @@ def resolve_token(symbol):
     except Exception as e:
         logger.error(f"Error resolving token for {symbol}: {e}")
         return None
+
