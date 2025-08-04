@@ -1,81 +1,58 @@
 import os
 import logging
-import threading
 from kiteconnect import KiteConnect
+from dotenv import load_dotenv
 
-# --- Configuration Constants ---
-# Use environment variables for sensitive or deployment-specific settings
-KITE_API_KEY = os.environ.get("KITE_API_KEY")
-KITE_API_SECRET = os.environ.get("KITE_API_SECRET")
-KITE_ACCESS_TOKEN = os.environ.get("KITE_ACCESS_TOKEN")
+# Load environment variables from .env file
+load_dotenv()
 
-# Trading instrument
-Instrument = "SBIN"
+# --- Credentials ---
+# Ensure these environment variables are set correctly on Render
+api_key = os.environ.get("KITE_API_KEY")
+access_token = os.environ.get("KITE_ACCESS_TOKEN")
 
-# Bot settings
-# The lot size for SBIN futures is 750
-TRADE_QUANTITY = int(os.environ.get("TRADE_QUANTITY", 750))
-monitor_frequency = float(os.environ.get("MONITOR_FREQUENCY", 15.0)) # seconds
+# --- KiteConnect Client Setup ---
+try:
+    kite = KiteConnect(api_key=api_key)
+    kite.set_access_token(access_token)
+except Exception as e:
+    logging.error(f"Failed to initialize KiteConnect client: {e}")
+    kite = None
 
-# Time interval for chart data used by indicators (e.g., "minute", "3minute", "5minute", "15minute")
-TIME_INTERVAL = os.environ.get("TIME_INTERVAL", "5minute")
+# --- Global Trading Parameters ---
+# The symbol you want to trade
+Instrument = "RELIANCE"
 
-# Stop Loss and Trailing Stop Loss configurations
-SL_PERCENT = float(os.environ.get("SL_PERCENT", 0.01))
-TSL_PERCENT = float(os.environ.get("TSL_PERCENT", 0.005))
-TSL_TRAIL_AMOUNT = float(os.environ.get("TSL_TRAIL_AMOUNT", 6.0))
+# The quantity for each trade
+TRADE_QUANTITY = 1
 
-# Database and synchronization settings
-DB_FILE_NAME = "bot_state.json"
-DB_LOCK_FILE = "bot_state.lock"
-GCS_BUCKET_NAME = os.environ.get("GCS_BUCKET_NAME")
+# The time interval for the candles (e.g., "5minute", "10minute", "15minute")
+TIME_INTERVAL = "5minute"
 
-# --- Indicators Parameters ---
+# --- Strategy Parameters ---
+# RSI settings
 RSI_PERIOD = 14
+
+# ATR settings
 ATR_PERIOD = 14
 ATR_MULTIPLIER = 2.0
-TRAILING_STOP_MULTIPLIER = 0.5
 
-# --- Global Variables ---
-# Global object for KiteConnect client
-kite = None
+# Trailing Stop Loss settings
+TRAILING_STOP_MULTIPLIER = 1.0
 
-# Global dictionary to store the current position state
+# --- Global State Dictionaries ---
+# This dictionary will hold the state of the current position.
+# We are no longer loading this from a file. The bot will check the API.
 current_position = {
-    "symbol": "",
+    "symbol": None,
     "token": None,
-    "side": "NONE",
+    "side": None,
     "active": False,
     "quantity": 0,
-    "entry_price": 0.0,
-    "initial_sl": 0.0,
-    "effective_sl": None,
+    "entry_price": 0,
+    "initial_sl": 0,
+    "effective_sl": 0
 }
 
-# Event object to signal a graceful shutdown
+# Threading event for graceful shutdown
 shutdown_requested = threading.Event()
-
-# --- Logging Setup ---
-config_logger = logging.getLogger(__name__)
-
-# --- KiteConnect Initialization ---
-if KITE_API_KEY and KITE_API_SECRET:
-    try:
-        kite = KiteConnect(api_key=KITE_API_KEY)
-        if KITE_ACCESS_TOKEN:
-            kite.set_access_token(KITE_ACCESS_TOKEN)
-            config_logger.info("KiteConnect initialized with access token.")
-        else:
-            config_logger.warning("Kite API Access Token is missing.")
-    except Exception as e:
-        config_logger.error(f"Error initializing KiteConnect: {e}", exc_info=True)
-        kite = None
-else:
-    config_logger.warning("Kite API Key or Secret missing. KiteConnect will not be initialized.")
-
-# --- Local Testing with Request Token (Optional) ---
-if not KITE_ACCESS_TOKEN and not os.environ.get("RENDER"):
-    config_logger.warning("No access token found. To generate one locally:")
-    config_logger.warning("1. Get a request token from the following URL:")
-    config_logger.warning(kite.login_url())
-    config_logger.warning("2. Run a separate script with the request token to get the access token.")
