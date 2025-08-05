@@ -6,15 +6,15 @@ import pytz
 from functools import wraps
 from config import (
     kite, Instrument, TRADE_QUANTITY, TIME_INTERVAL,
-    RSI_PERIOD, ATR_PERIOD, ATR_MULTIPLIER, TRAILING_STOP_MULTIPLIER
+    RSI_PERIOD, ATR_PERIOD, ATR_MULTIPLIER, TRAILING_STOP_MULTIPLIER,
+    current_position, shutdown_requested, LIVE_MODE
 )
 from indicators import calculate_rsi, calculate_atr
 from patterns import is_bullish_engulfing, is_bearish_engulfing
 from kite_client import KiteClient
 from symbol_resolver import resolve_current_month_symbol, resolve_token
+import threading
 
-# --- Global State from config.py ---
-from config import current_position, shutdown_requested, LIVE_MODE
 
 # --- Helper Functions for Robustness ---
 def retry(max_retries=3, initial_delay=1.0):
@@ -231,9 +231,13 @@ class LiveTradingBot:
     def _is_market_open(self):
         """
         Checks if the current time is within Indian market hours (9:15 AM - 3:30 PM IST) and on a weekday.
+        This function has been updated to be more resilient to server time zones.
         """
         ist = pytz.timezone('Asia/Kolkata')
-        now_ist = datetime.datetime.now(ist)
+        
+        # Get the current time in UTC and convert it to IST
+        now_utc = datetime.datetime.now(pytz.utc)
+        now_ist = now_utc.astimezone(ist)
         
         market_open = now_ist.replace(hour=9, minute=15, second=0, microsecond=0)
         market_close = now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
@@ -241,6 +245,9 @@ class LiveTradingBot:
         is_weekday = 0 <= now_ist.weekday() <= 4
         
         is_open = is_weekday and market_open <= now_ist <= market_close
+        
+        # Log the calculated time for debugging
+        self.logger.info(f"Current time in IST is {now_ist.strftime('%H:%M:%S')}. Market open check is: {is_open}.")
         
         return is_open
     
@@ -297,10 +304,6 @@ class LiveTradingBot:
                 time.sleep(60)
     
 if __name__ == "__main__":
-    # Ensure LIVE_MODE is defined in config.py
-    # LIVE_MODE = False # Example for paper trading
-    # LIVE_MODE = True  # Example for live trading
-    
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     
     # Create and run the bot
