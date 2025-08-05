@@ -285,8 +285,15 @@ class LiveTradingBot:
                         continue # Skip the rest of the loop for this iteration
                 
                 # After checking order status, proceed with candle logic
-                latest_candle = self.client.get_live_data(self.instrument_token, TIME_INTERVAL)
-                
+                latest_candle = None
+                retries = 0
+                while not latest_candle and retries < 5:
+                    latest_candle = self.client.get_live_data(self.instrument_token, TIME_INTERVAL)
+                    if not latest_candle:
+                        self.logger.info(f"No new candles found. Retrying in 10 seconds. Retry attempt {retries + 1}...")
+                        time.sleep(10)
+                        retries += 1
+
                 if latest_candle and latest_candle['date'] not in self.historical_data.index:
                     new_candle_df = pd.DataFrame([latest_candle]).set_index('date')
                     self.historical_data = pd.concat([self.historical_data, new_candle_df])
@@ -296,6 +303,8 @@ class LiveTradingBot:
                     
                     self.check_exit_conditions()
                     self.check_entry_conditions()
+                elif latest_candle:
+                    self.logger.info("Latest candle already in historical data. Waiting for the next candle...")
                 
                 self.logger.info("Waiting for the next candle...")
                 time.sleep(300)
