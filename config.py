@@ -22,7 +22,7 @@ except Exception as e:
 
 # --- Global Trading Parameters ---
 # Set this to 'True' for live trading and 'False' for paper trading.
-LIVE_MODE = False
+LIVE_MODE = True
 
 # The symbol you want to trade
 Instrument = "SBIN"
@@ -60,3 +60,4 @@ current_position = {
 
 # Threading event for graceful shutdown
 shutdown_requested = threading.Event()
+
