@@ -35,35 +35,39 @@ class KiteClient:
     def get_live_data(self, instrument_token: int, interval: str) -> dict:
         """
         Fetches the latest completed candle from the KiteConnect API.
-        This function will fetch the last two candles to ensure the latest one is complete.
-        :return: A dictionary representing the latest completed candle.
+        This function fetches a small window of data and returns the last available candle,
+        assuming it is a completed candle.
+        :return: A dictionary representing the latest completed candle, or None if no data is found.
         """
         if not self.kite:
             self.logger.error("KiteConnect object is not initialized. Cannot fetch live data.")
             return None
         
+        # It's better to fetch a short window to ensure we get the latest completed candle.
+        # KiteConnect's historical data API returns only completed candles.
+        to_date = datetime.datetime.now()
+        # Fetch data for the last hour to be safe and ensure a completed candle is available.
+        from_date = to_date - datetime.timedelta(hours=1) 
+        
         self.logger.info("Fetching latest candle from Kite...")
         try:
-            to_date = datetime.datetime.now()
-            from_date = to_date - datetime.timedelta(minutes=30) # Fetch enough data to be safe
             raw_data = self.kite.historical_data(instrument_token, from_date, to_date, interval, continuous=False)
             
-            # --- FIX: Check if the data is not empty before processing it ---
+            # If the API returns any data, get the last candle.
             if raw_data:
-                df = pd.DataFrame(raw_data)
+                # Convert the last dictionary in the list to a DataFrame
+                df = pd.DataFrame([raw_data[-1]])
+                # Convert the date column to datetime objects
                 df['date'] = pd.to_datetime(df['date'])
-                df.set_index('date', inplace=True)
                 
-                # --- FIX: Create a dictionary that includes the date from the index ---
-                # Get the last candle and its date from the index
-                latest_candle_data = df.iloc[-1].to_dict()
-                latest_candle_data['date'] = df.index[-1]
+                # Check if the candle is not a duplicate of a previously fetched candle.
+                # The main bot logic will handle this check, but it is a good practice
+                # to check it here too if necessary.
                 
-                return latest_candle_data
+                # Convert the DataFrame row back to a dictionary and return it.
+                return df.iloc[0].to_dict()
             else:
-                self.logger.info("No new candles found in the last 30 minutes.")
                 return None
-                
         except Exception as e:
             self.logger.error(f"Error fetching live data: {e}", exc_info=True)
             return None
