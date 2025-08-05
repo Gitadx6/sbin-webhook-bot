@@ -15,7 +15,14 @@ from kite_client import KiteClient
 from symbol_resolver import resolve_current_month_symbol, resolve_token
 import threading
 
-
+#--Fetch IP of render
+import requests
+try:
+    ip = requests.get('https://api.ipify.org').text
+    print(f"My public IP address is: {ip}")
+except Exception as e:
+    print(f"Could not get IP: {e}")
+    
 # --- Helper Functions for Robustness ---
 def retry(max_retries=3, initial_delay=1.0):
     """
